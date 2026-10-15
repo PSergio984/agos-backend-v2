@@ -84,6 +84,7 @@ class NotificationLogService:
                     title=d.dispatch.title,
                     message=d.dispatch.message,
                     dispatched_at=d.dispatch.created_at,
+                    location_id=d.dispatch.location_id,
                     is_acknowledged=d.acknowledgement is not None,
                     acknowledged_at=d.acknowledgement.acknowledged_at if d.acknowledgement else None,
                     acknowledge_message=d.acknowledgement.message if d.acknowledgement else None,

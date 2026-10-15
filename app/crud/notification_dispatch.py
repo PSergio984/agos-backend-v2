@@ -12,12 +12,14 @@ class CRUDNotificationDispatch(CRUDBase):
         notif_type: NotificationType,
         title: str,
         message: str,
+        location_id: int | None = None,
     ) -> NotificationDispatch:
-        
+
         dispatch = NotificationDispatch(
             type=notif_type,
             title=title,
             message=message,
+            location_id=location_id,
         )
         db.add(dispatch)
         await db.flush()
