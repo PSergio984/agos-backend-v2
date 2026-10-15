@@ -1,7 +1,7 @@
 # Database Schema
 
 PostgreSQL with async SQLAlchemy (asyncpg). This document reflects the SQLAlchemy
-models and the Alembic migration chain through revision `e5f6a7b8c9d0`.
+models and the Alembic migration chain through revision `d5e6f7a8b9c0`.
 `DateTime(timezone=True)` columns are PostgreSQL timestamps with time zone. Columns
 marked `DEFAULT UTC now` use `timezone('UTC', now())`; timestamps without that
 marker must be supplied by the application or may be nullable.
@@ -17,17 +17,22 @@ erDiagram
     ADMIN_USERS ||--o{ NOTIFICATION_TEMPLATES : creates
     ADMIN_USERS ||--o{ EVACUATION_EVENTS : authorizes
 
-    LOCATIONS ||--o| SENSOR_DEVICES : has
+    LOCATIONS ||--o{ SENSOR_DEVICES : has
     SENSOR_DEVICES ||--o{ SENSOR_READINGS : produces
-    LOCATIONS ||--o| CAMERA_DEVICES : has
+    LOCATIONS ||--o{ CAMERA_DEVICES : has
     CAMERA_DEVICES ||--o{ MODEL_READINGS : produces
     LOCATIONS ||--o{ WEATHER : records
     LOCATIONS ||--o{ DAILY_SUMMARIES : summarizes
-    LOCATIONS ||--o{ RESPONDERS : assigns
+    LOCATIONS ||--o{ RESPONDERS : "home site"
+    LOCATIONS ||--o{ RESPONDERS : "active site"
     LOCATIONS ||--o{ EVACUATION_CENTERS : contains
     LOCATIONS ||--o{ CITIZEN_SUBSCRIPTIONS : scopes
     LOCATIONS ||--o{ EVACUATION_EVENTS : scopes
+    LOCATIONS ||--o{ NOTIFICATION_DISPATCHES : "targets site"
+    GROUPS }o--o| LOCATIONS : "belongs to site"
 
+    RESPONDERS ||--o{ RESPONDER_DEPLOYMENTS : "deployed to"
+    LOCATIONS ||--o{ RESPONDER_DEPLOYMENTS : "hosts"
     RESPONDERS ||--o{ RESPONDER_GROUPS : joins
     GROUPS ||--o{ RESPONDER_GROUPS : contains
     RESPONDERS ||--o| RESPONDERS_OTP_VERIFICATION : verifies
@@ -234,9 +239,11 @@ sites, but not twice in the same site nor twice globally.
 
 **Index:** `id`.
 
-Each site gets its own `All Active Responders` group seeded on first use;
-the global (NULL-site) default group is kept for backward compatibility and
-cannot be deleted.
+Each site gets its own `All Active Responders` group on responder activation
+(`location_id` set). Migration `b3c4d5e6f7a8` backfilled pre-existing global
+groups onto the first location, so NULL-site rows only appear for groups
+created without a site going forward. The default-named group cannot be
+deleted or renamed.
 
 ### responder_groups
 
@@ -252,7 +259,7 @@ cannot be deleted.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| responder_id | UUID | FK → `responders.id`, NOT NULL |
+| responder_id | UUID | FK → `responders.id`, ON DELETE CASCADE, NOT NULL |
 | location_id | INTEGER | FK → `locations.id`, NOT NULL; the site the responder is posted to (never the home site) |
 | starts_at | TIMESTAMPTZ | NOT NULL, server DEFAULT UTC now; optional client-supplied start overrides the default |
 | ends_at | TIMESTAMPTZ | NULLABLE; NULL = open posting |

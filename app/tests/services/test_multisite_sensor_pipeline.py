@@ -175,10 +175,6 @@ async def test_device_ids_cache_tolerates_deviceless_site(monkeypatch):
     assert service._device_ids_cache[3].sensor_device_id is None
     assert service._device_ids_cache[3].camera_device_id is None
 
-    # Same for the reverse map — a deviceless site contributes no entry.
-    await service.update_location_id_per_sensor_device_cache(db=db)
-    assert service._location_id_per_sensor_device_cache == {10: 1}
-
 
 async def test_record_reading_rejects_reading_for_inactive_site(monkeypatch):
     """A device on a deactivated site must not record — deactivation gates

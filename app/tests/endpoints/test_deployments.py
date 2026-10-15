@@ -6,7 +6,7 @@ service logic with CRUD patched by AsyncMock.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -637,6 +637,22 @@ async def test_service_set_active_site_deployed():
     assert result.active_location_id == SITE_B_ID
 
 
+async def test_service_set_active_site_future_deployment_400():
+    # A posting scheduled for the future isn't a valid presence target yet.
+    responder = _responder()
+    future_dep = _deployment(
+        location_id=SITE_B_ID,
+        starts_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    cruds = _app_patches(responder=responder, open_deployment=future_dep)
+    with cruds[0], cruds[1], cruds[2]:
+        with pytest.raises(HTTPException) as exc:
+            await responder_app_service.set_active_site(
+                responder_id=str(RESPONDER_ID), location_id=SITE_B_ID, db=_db()
+            )
+    assert exc.value.status_code == 400
+
+
 async def test_service_set_active_site_non_member_400():
     responder = _responder()
     open_dep = _deployment(location_id=SITE_B_ID)
@@ -738,8 +754,6 @@ async def test_service_open_deployment_inactive_site_400():
 
 
 async def test_service_open_deployment_passes_planned_ends_at():
-    from datetime import timedelta
-
     planned = datetime.now(timezone.utc) + timedelta(days=7)
     cruds = _deployment_patches(responder=_responder(), location=_location())
     with cruds[0], cruds[1], cruds[2] as dep_crud, cruds[3]:

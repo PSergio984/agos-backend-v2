@@ -126,9 +126,9 @@ Auth legend: `JWT` = admin token required, `SU` = superuser admin token required
 |--------|----------|------|-------------|
 | GET | `/all` | JWT | List all responders. |
 | GET | `/additional-details/{responder_id}` | JWT | Detailed responder info (groups, push status, delivery stats). |
-| GET | `/template` | JWT | Download Excel template for responder bulk import. Includes a Site column (home site by name). |
-| POST | `/bulk` | JWT | Bulk create responders. |
-| PATCH | `/{responder_id}` | JWT | Update responder fields (including home `location_id`). |
+| GET | `/template` | JWT | Download Excel template for responder bulk import. Columns: First Name, Last Name, Phone Number, Location ID (numeric site id from `GET /locations`). |
+| POST | `/bulk` | JWT | Bulk create responders. Each item requires `location_id` (home site). |
+| PATCH | `/{responder_id}` | JWT | Update responder `first_name`, `last_name`, `phone_number`. Home site changes go through deployments/`location_id` on create. |
 | GET | `/{responder_id}/deployments` | JWT | The responder's sites: home site + every deployment record. |
 | POST | `/{responder_id}/deployments` | JWT | Open a deployment to another site. Body: `location_id`, optional `starts_at`, `planned_ends_at`. Supersedes any open deployment; 409 if targeting the home site or an already-open site. |
 | POST | `/{responder_id}/deployments/{deployment_id}/close` | JWT | Close an open deployment (sets `ends_at`). 409 if already closed. |
@@ -150,10 +150,10 @@ Auth legend: `JWT` = admin token required, `SU` = superuser admin token required
 **POST /bulk**
 ```json
 // Request
-[{ "first_name": "Jane", "last_name": "Doe", "phone_number": "09171234567" }]
+[{ "first_name": "Jane", "last_name": "Doe", "phone_number": "09171234567", "location_id": 1 }]
 
 // Response 201
-[{ "id": "uuid", "first_name": "Jane", "last_name": "Doe", "phone_number": "09171234567", "status": "pending", "has_push_subscription": false }]
+[{ "id": "uuid", "first_name": "Jane", "last_name": "Doe", "phone_number": "09171234567", "location_id": 1, "status": "pending", "has_push_subscription": false }]
 ```
 
 ---

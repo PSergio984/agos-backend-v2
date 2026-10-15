@@ -266,7 +266,13 @@ class ResponderAppService:
             open_deployment = await responder_deployment_crud.get_open_for_responder(
                 db=db, responder_id=responder.id
             )
-            if open_deployment is None or open_deployment.location_id != location_id:
+            # A deployment open-ended but scheduled for the future isn't a
+            # valid presence target yet — "open" means started and unclosed.
+            if (
+                open_deployment is None
+                or open_deployment.location_id != location_id
+                or open_deployment.starts_at > datetime.now(timezone.utc)
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail="Responder is not deployed to that site.",

@@ -143,9 +143,9 @@ class SensorReadingService:
             message="Retrieved successfully",
             sensor_reading=calculated_summary,
         )
-        location_id = await cache_service.get_location_id_per_sensor_device(
-            db=db, sensor_device_id=db_reading.sensor_device_id
-        )
+        # The device row is authoritative — the reverse cache only maps each
+        # site's default sensor, so a second sensor on a site would raise.
+        location_id = sensor_device.location_id
         await websocket_service.broadcast_update(
             update_type="sensor_update",
             data=response.model_dump(mode="json"),
