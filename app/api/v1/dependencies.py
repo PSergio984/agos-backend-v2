@@ -92,6 +92,21 @@ async def require_auth_allow_password_change(
     return current_user
 
 
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def optional_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+    db: AsyncSession = Depends(get_db)) -> CurrentUser | None:
+
+    """Admin auth that returns None instead of raising when no credentials are
+    sent — for routes that are public by default but gate privileged flags
+    (e.g. include_inactive). A malformed token still 401s."""
+    if credentials is None:
+        return None
+    return await _authenticate_admin(credentials=credentials, db=db)
+
+
 async def require_superuser(
     current_user: CurrentUser = Depends(require_auth)) -> CurrentUser:
     

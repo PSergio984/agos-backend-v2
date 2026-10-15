@@ -121,11 +121,18 @@ def test_list_sites_defaults_to_active_only(anon_client):
     assert svc.await_args.kwargs["include_inactive"] is False
 
 
-def test_list_sites_include_inactive_param_passed(anon_client):
+def test_list_sites_include_inactive_requires_admin(anon_client):
+    # Anonymous callers get the active list only — retired-site names/coords
+    # aren't public enumeration material.
+    res = anon_client.get("/api/v1/locations?include_inactive=true")
+    assert res.status_code == 401
+
+
+def test_list_sites_include_inactive_param_passed(admin_client):
     with patch.object(
         location_service, "list_sites", new=AsyncMock(return_value=[SITE_A])
     ) as svc:
-        anon_client.get("/api/v1/locations?include_inactive=true")
+        admin_client.get("/api/v1/locations?include_inactive=true")
 
     assert svc.await_args.kwargs["include_inactive"] is True
 

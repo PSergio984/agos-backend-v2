@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import CurrentUser, require_auth
+from app.api.v1.dependencies import CurrentUser, optional_auth, require_auth
 from app.core.database import get_db
 from app.schemas import LocationCreate, LocationResponse, LocationUpdate
 from app.services import location_service
@@ -13,11 +13,17 @@ router = APIRouter(prefix="/locations", tags=["locations"])
 async def list_sites(
     include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(optional_auth),
 ) -> list[LocationResponse]:
     """Public: the site pickers (admin view scope + responder presence) need
     the registry without admin credentials — same exposure as sensor config.
-    Defaults to active sites only; the admin registry passes
-    include_inactive=true for the full list."""
+    Defaults to active sites only; include_inactive enumerates retired sites
+    and is admin-only."""
+    if include_inactive and current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin auth required to list inactive sites.",
+        )
     return await location_service.list_sites(db=db, include_inactive=include_inactive)
 
 

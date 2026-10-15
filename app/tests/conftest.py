@@ -47,6 +47,7 @@ import uuid  # noqa: E402
 from app.api.v1.dependencies import (  # noqa: E402
     CurrentResponder,
     CurrentUser,
+    optional_auth,
     require_auth,
     require_iot_api_key,
     require_responder_auth,
@@ -61,6 +62,12 @@ async def _fake_db():
 @pytest.fixture()
 def admin_client():
     app.dependency_overrides[require_auth] = lambda: CurrentUser(
+        id=str(uuid.uuid4()), is_superuser=True, is_enabled=True,
+        force_password_change=False,
+    )
+    # Routes that gate a privileged flag behind optional auth (locations
+    # include_inactive) should see this client as an admin too.
+    app.dependency_overrides[optional_auth] = lambda: CurrentUser(
         id=str(uuid.uuid4()), is_superuser=True, is_enabled=True,
         force_password_change=False,
     )

@@ -86,12 +86,19 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
-    # Historical dispatches/groups were all site-1 data. Backfill to the first
-    # location when one exists; on an empty DB they stay NULL (announcement).
+    # Historical dispatches were all site-1 data — but announcements were
+    # global and citizen alerts already know their site through the
+    # evacuation_events link. Resolve those first, leave announcements NULL
+    # (global), and only then fall back to the first location.
+    op.execute(
+        "UPDATE notification_dispatches nd SET location_id = ee.location_id "
+        "FROM evacuation_events ee "
+        "WHERE ee.dispatch_id = nd.id AND nd.location_id IS NULL"
+    )
     op.execute(
         "UPDATE notification_dispatches SET location_id = "
         "(SELECT id FROM locations ORDER BY id LIMIT 1) "
-        "WHERE location_id IS NULL"
+        "WHERE location_id IS NULL AND type != 'ANNOUNCEMENT'"
     )
     op.execute(
         "UPDATE groups SET location_id = "

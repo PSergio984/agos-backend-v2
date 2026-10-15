@@ -12,7 +12,7 @@ Field worker (a cleaner) who receives and acts on blockage alerts. Schema: `resp
 
 ## Deployment
 
-A responder's temporary posting to a site — site + active window. Schema (planned): `responder_deployments`. Membership (who may deploy where) is admin-set; presence (where they are today) is responder-marked, admin-overridable.
+A responder's temporary posting to a site — site + active window. Schema: `responder_deployments`. Membership (who may deploy where) is admin-set; presence (where they are today) is responder-marked, admin-overridable.
 
 ## Active site / presence
 

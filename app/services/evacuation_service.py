@@ -87,14 +87,16 @@ class EvacuationService:
         from app.services import notification_service, websocket_service
 
         is_all_clear = payload.kind == "all_clear"
-        self._guard_double_dispatch(payload.location_id, payload.kind)
 
         # An evacuation targets a real, active site — an unknown id would
         # otherwise fail on the FK at commit; an inactive one shouldn't get
-        # citizen pushes or live alerts.
+        # citizen pushes or live alerts. Checked before the dedup guard so a
+        # rejected call never poisons the double-dispatch cache.
         site = await location_crud.get(db=db, id=payload.location_id)
         if site is None or not site.is_active:
             raise HTTPException(status_code=400, detail="Site is not active.")
+
+        self._guard_double_dispatch(payload.location_id, payload.kind)
 
         if is_all_clear:
             title = "All Clear"
