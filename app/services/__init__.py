@@ -26,3 +26,4 @@ from .evacuation_center_service import evacuation_center_service
 from .evacuation_service import evacuation_service
 from .evacuation_route_service import evacuation_route_service
 from .location_service import location_service
+from .camera_device_service import camera_device_service

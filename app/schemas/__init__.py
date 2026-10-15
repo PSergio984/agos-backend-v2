@@ -2,7 +2,8 @@ from .admin_user import AdminUserResponse, AdminUserCreate
 from .token import Token, TokenData, RefreshTokenRequest
 from .admin_audit_log import AdminAuditLogCreate, AdminAuditLogResponse
 from .system_settings import SystemSettingsCreate, SystemSettingsResponse, SystemSettingsUpdate, AlertThresholdsResponse
-from .sensor_devices import SensorDeviceResponse, SensorDeviceStatusResponse
+from .sensor_devices import SensorDeviceResponse, SensorDeviceStatusResponse, SensorDeviceCreate, SensorDeviceUpdate, SensorDeviceItem
+from .camera_devices import CameraDeviceCreate, CameraDeviceUpdate, CameraDeviceItem
 from .sensor_reading import SensorReadingCreate, SensorReadingResponse, SensorReadingForExport, SensorReadingPaginatedResponse, SensorDataRecordedResponse, SensorReadingMinimalResponse, SensorReadingForExportResponse, SensorReadingTrendResponse
 from .model_readings import ModelReadingCreate
 from .admin_audit_log import AdminAuditLogPaginatedResponse

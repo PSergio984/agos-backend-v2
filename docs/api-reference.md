@@ -298,7 +298,7 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/status` | — | Camera online status. |
-| POST | `/upload-image` | IOT | Upload camera image for a `location_id`, broadcast `camera_update`, run ML inference, and broadcast blockage/fusion updates. Rate limited: 35/min. |
+| POST | `/upload-image` | IOT | Upload camera image. Params: `camera_device_id`, `location_id` — must match the device's registered site (400 on mismatch). Broadcasts `camera_update`, runs ML inference, broadcasts blockage/fusion updates. Rate limited: 35/min. |
 
 ---
 
@@ -348,7 +348,7 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `WS /ws?location_id={id}` | — | Admin/responder client connection. Receives initial state, live sensor, blockage, weather, fusion, and camera-frame updates. |
-| `WS /ws/rpi?camera_device_id={id}&location_id={id}` | — | RPi camera connection. Sends binary frames for live camera broadcast and ML inference. |
+| `WS /ws/rpi?camera_device_id={id}&location_id={id}` | — | RPi camera connection. `location_id` must match the device's registered site (close 1008 on mismatch). Sends binary frames for live camera broadcast and ML inference. |
 
 ### WebSocket Message Format
 

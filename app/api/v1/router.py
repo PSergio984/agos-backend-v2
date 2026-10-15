@@ -7,7 +7,7 @@ from app.api.v1.endpoints import (
 )
 from app.api.v1.endpoints import sensor_reading, sensor_device, weather
 from app.api.v1.endpoints import responder, responder_group, push, responder_app
-from app.api.v1.endpoints import stream, core
+from app.api.v1.endpoints import stream, core, camera_device
 from app.api.v1.endpoints import daily_summary, analysis
 from app.api.v1.endpoints import notification_logs
 from app.api.v1.endpoints import model_reading_logs
@@ -24,6 +24,7 @@ api_router.include_router(auth.router)
 api_router.include_router(admin_audit_log.router)
 api_router.include_router(admin_users.router)
 api_router.include_router(analysis.router)
+api_router.include_router(camera_device.router)
 api_router.include_router(core.router)
 api_router.include_router(daily_summary.router)
 api_router.include_router(notification_logs.router)
