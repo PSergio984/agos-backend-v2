@@ -7,6 +7,7 @@ async def escalation_check_job():
     """Re-notify responders with unacknowledged critical alerts past the timeout."""
     from app.crud.system_settings import system_settings_crud
     from app.crud.notification_delivery import notification_delivery_crud
+    from app.crud.location import location_crud
     from app.services import notification_service
     from app.schemas.subscription import SendNotificationSchema, CustomNotificationPayload
     from app.models.notification_template import NotificationType
@@ -31,40 +32,60 @@ async def escalation_check_job():
             if not overdue:
                 return
 
-            # Group by responder to avoid duplicate notifications
-            responder_ids_seen = set()
-            deliveries_to_escalate = []
-
+            # Group overdue deliveries by their dispatch's site: a site-scoped
+            # dispatch escalates only to that site's responders, and a NULL-site
+            # dispatch (announcement) escalates to everyone as before.
+            deliveries_by_site: dict[int | None, list] = {}
             for delivery in overdue:
-                if delivery.responder_id not in responder_ids_seen:
-                    responder_ids_seen.add(delivery.responder_id)
-                    deliveries_to_escalate.append(delivery)
+                deliveries_by_site.setdefault(
+                    delivery.dispatch.location_id, []
+                ).append(delivery)
 
-            if not deliveries_to_escalate:
-                return
+            for location_id, site_deliveries in deliveries_by_site.items():
+                # Dedup on (site, responder): a responder with several overdue
+                # alerts at the same site gets one ping; the same responder
+                # overdue at two different sites still gets one ping per site —
+                # different sites are different alerts.
+                responder_ids = list(
+                    dict.fromkeys(d.responder_id for d in site_deliveries)
+                )
 
-            responder_ids = list(responder_ids_seen)
+                site_name = None
+                if location_id is not None:
+                    location = await location_crud.get(db=db, id=location_id)
+                    site_name = location.name if location else f"site {location_id}"
 
-            payload = SendNotificationSchema(
-                responder_ids=responder_ids,
-                template_id=None,
-                custom_notification=CustomNotificationPayload(
-                    type=NotificationType.CRITICAL,
-                    title="Critical Alert - Escalation",
-                    message="You have unacknowledged critical alerts. Please review and respond immediately.",
-                ),
-            )
-            await notification_service.send_notification_to_subscribers(
-                payload=payload,
-                db=db,
-                system_initiated=True,
-            )
+                payload = SendNotificationSchema(
+                    responder_ids=responder_ids,
+                    template_id=None,
+                    custom_notification=CustomNotificationPayload(
+                        type=NotificationType.CRITICAL,
+                        title="Critical Alert - Escalation",
+                        message=(
+                            f"You have unacknowledged critical alerts at {site_name}. "
+                            "Please review and respond immediately."
+                            if site_name
+                            else "You have unacknowledged critical alerts. "
+                            "Please review and respond immediately."
+                        ),
+                    ),
+                )
+                await notification_service.send_notification_to_subscribers(
+                    payload=payload,
+                    db=db,
+                    system_initiated=True,
+                    location_id=location_id,
+                )
+                print(
+                    f"⚡ Escalated {len(site_deliveries)} overdue delivery(ies) "
+                    f"to {len(responder_ids)} responder(s) at {site_name or 'all sites'}"
+                )
 
             # Increment escalation count for all overdue deliveries
             for delivery in overdue:
                 await notification_delivery_crud.increment_escalation_count(db=db, delivery_id=delivery.id)
 
-            print(f"⚡ Escalated critical alerts to {len(responder_ids)} responder(s), {len(overdue)} delivery(ies) escalated")
+            print(f"⚡ Escalation run complete: {len(overdue)} delivery(ies) escalated across {len(deliveries_by_site)} site(s)")
 
     except Exception as e:
         print(f"⚠️ Escalation check failed: {e}")

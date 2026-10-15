@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
+from app.crud import location_crud
 from app.crud import notification_delivery_crud
 from app.crud import notification_dispatch_crud
 from app.crud import responder_otp_verification_crud
@@ -196,16 +197,23 @@ class ResponderAppService:
         await db.commit()
 
         claimer_name = f"{responder.first_name} {responder.last_name}"
-        await websocket_service.broadcast_update(
-            "alert_claimed",
-            {
-                "dispatch_id": dispatch.id,
-                "claimed_by": str(responder.id),
-                "claimed_by_name": claimer_name,
-                "claimed_at": dispatch.claimed_at.isoformat(),
-            },
-            location_id=responder.location_id,
-        )
+        claim_data = {
+            "dispatch_id": dispatch.id,
+            "claimed_by": str(responder.id),
+            "claimed_by_name": claimer_name,
+            "claimed_at": dispatch.claimed_at.isoformat(),
+        }
+        # The claim broadcast follows the dispatch's site — that's the channel
+        # the alert went out on. A NULL-site dispatch is an announcement every
+        # site received, so every site's channel gets the claim too.
+        if dispatch.location_id is None:
+            location_ids = await location_crud.get_all_ids(db=db)
+        else:
+            location_ids = [dispatch.location_id]
+        for location_id in location_ids:
+            await websocket_service.broadcast_update(
+                "alert_claimed", claim_data, location_id=location_id
+            )
 
         return ClaimResponse(
             dispatch_id=dispatch.id,
