@@ -37,13 +37,18 @@ class DailySummaryService:
         end_of_day = local_end.astimezone(timezone.utc)
 
         device_ids = await cache_service.get_device_ids_per_location(db, location_id)
-        sensor_config = await cache_service.get_sensor_config(
-            db, sensor_device_id=device_ids.sensor_device_id
-        )
-        if not sensor_config:
-            raise ValueError("Missing global sensor config from cache_service.get_sensor_config()")
 
-        critical_level = float(sensor_config.critical_threshold)
+        # A site with no active sensor device has no per-device config; its
+        # summary simply has no sensor-derived risk (critical_level only feeds
+        # sensor-event critical_percentage).
+        critical_level = 0.0
+        if device_ids.sensor_device_id:
+            sensor_config = await cache_service.get_sensor_config(
+                db, sensor_device_id=device_ids.sensor_device_id
+            )
+            if not sensor_config:
+                raise ValueError("Missing sensor config from cache_service.get_sensor_config()")
+            critical_level = float(sensor_config.critical_threshold)
 
         sensor_context = []
         model_context = []

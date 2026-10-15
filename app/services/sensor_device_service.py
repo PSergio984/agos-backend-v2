@@ -118,7 +118,7 @@ class SensorDeviceService:
                 detail="A sensor device with that name already exists on this site.",
             )
         try:
-            created = await sensor_device_crud.create_and_return(db=db, obj_in=payload)
+            created = await sensor_device_crud.create_and_return_no_commit(db=db, obj_in=payload)
             await admin_audit_log_crud.create_only_no_commit(
                 db=db,
                 obj_in=AdminAuditLogCreate(
@@ -137,6 +137,9 @@ class SensorDeviceService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid sensor device data.",
             )
+        # A device registered at runtime must land in the device-id caches,
+        # otherwise ingest for it misses until restart.
+        cache_service.invalidate_device_caches()
         return SensorDeviceItem.model_validate(created)
 
     async def update_device(
@@ -177,7 +180,7 @@ class SensorDeviceService:
 
         was_active = device.is_active
         try:
-            updated = await sensor_device_crud.update(db=db, db_obj=device, obj_in=payload)
+            updated = await sensor_device_crud.update_no_commit(db=db, db_obj=device, obj_in=payload)
             if "is_active" in changes and updated.is_active != was_active:
                 verb = "Deactivated" if not updated.is_active else "Reactivated"
             else:
@@ -197,6 +200,12 @@ class SensorDeviceService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not update sensor device.",
             )
+        if "sensor_config" in changes:
+            await cache_service.update_sensor_config_cache(
+                db=db, sensor_device_id=updated.id
+            )
+        if "location_id" in changes or "is_active" in changes:
+            cache_service.invalidate_device_caches()
         return SensorDeviceItem.model_validate(updated)
 
     async def _require_active_site(self, db: AsyncSession, location_id: int):

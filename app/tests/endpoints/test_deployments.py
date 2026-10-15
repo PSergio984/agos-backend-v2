@@ -11,16 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
-from app.main import app
-from app.api.v1.dependencies import (
-    CurrentResponder,
-    CurrentUser,
-    require_auth,
-    require_responder_auth,
-)
-from app.core.database import get_db
+from app.api.v1.dependencies import CurrentUser
 from app.schemas.responder import (
     ResponderActiveSiteResponse,
     ResponderDeploymentCreate,
@@ -42,44 +34,9 @@ DEPLOYMENT_ITEM = ResponderDeploymentItem(
     location_name="Site B",
     starts_at=datetime.now(timezone.utc),
     ends_at=None,
+    planned_ends_at=None,
     created_by=ADMIN_ID,
 )
-
-
-@pytest.fixture()
-def admin_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[require_auth] = lambda: CurrentUser(
-        id=str(ADMIN_ID), is_superuser=True, is_enabled=True, force_password_change=False
-    )
-    app.dependency_overrides[get_db] = _fake_db
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture()
-def responder_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[require_responder_auth] = lambda: CurrentResponder(
-        id=str(RESPONDER_ID)
-    )
-    app.dependency_overrides[get_db] = _fake_db
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture()
-def anon_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[get_db] = _fake_db
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -619,7 +576,9 @@ async def test_service_list_deployments_unknown_responder_404():
 # ---------------------------------------------------------------------------
 
 
-def _app_patches(responder=None, open_deployment=None):
+def _app_patches(responder=None, open_deployment=None, location=None):
+    if location is None:
+        location = _location(is_active=True)
     return (
         patch(
             f"{APP_MODULE}.responder_crud",
@@ -629,6 +588,10 @@ def _app_patches(responder=None, open_deployment=None):
             f"{APP_MODULE}.responder_deployment_crud",
             **{"get_open_for_responder": AsyncMock(return_value=open_deployment)},
         ),
+        patch(
+            f"{APP_MODULE}.location_crud",
+            **{"get": AsyncMock(return_value=location)},
+        ),
     )
 
 
@@ -636,7 +599,7 @@ async def test_service_set_active_site_home():
     responder = _responder()
     cruds = _app_patches(responder=responder)
     db = _db()
-    with cruds[0], cruds[1] as dep_crud:
+    with cruds[0], cruds[1] as dep_crud, cruds[2]:
         result = await responder_app_service.set_active_site(
             responder_id=str(RESPONDER_ID), location_id=HOME_SITE_ID, db=db
         )
@@ -652,7 +615,7 @@ async def test_service_set_active_site_deployed():
     responder = _responder()
     open_dep = _deployment(location_id=SITE_B_ID)
     cruds = _app_patches(responder=responder, open_deployment=open_dep)
-    with cruds[0], cruds[1]:
+    with cruds[0], cruds[1], cruds[2]:
         result = await responder_app_service.set_active_site(
             responder_id=str(RESPONDER_ID), location_id=SITE_B_ID, db=_db()
         )
@@ -665,7 +628,7 @@ async def test_service_set_active_site_non_member_400():
     responder = _responder()
     open_dep = _deployment(location_id=SITE_B_ID)
     cruds = _app_patches(responder=responder, open_deployment=open_dep)
-    with cruds[0], cruds[1]:
+    with cruds[0], cruds[1], cruds[2]:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.set_active_site(
                 responder_id=str(RESPONDER_ID), location_id=SITE_C_ID, db=_db()
@@ -677,7 +640,7 @@ async def test_service_set_active_site_non_member_400():
 async def test_service_set_active_site_no_open_deployment_400():
     responder = _responder()
     cruds = _app_patches(responder=responder, open_deployment=None)
-    with cruds[0], cruds[1]:
+    with cruds[0], cruds[1], cruds[2]:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.set_active_site(
                 responder_id=str(RESPONDER_ID), location_id=SITE_B_ID, db=_db()
@@ -687,9 +650,128 @@ async def test_service_set_active_site_no_open_deployment_400():
 
 async def test_service_set_active_site_unknown_responder_404():
     cruds = _app_patches(responder=None)
-    with cruds[0], cruds[1]:
+    with cruds[0], cruds[1], cruds[2]:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.set_active_site(
                 responder_id=str(uuid.uuid4()), location_id=SITE_B_ID, db=_db()
             )
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: admin presence override, inactive-site deploy, planned window
+# ---------------------------------------------------------------------------
+
+
+def test_admin_set_active_site_success(admin_client):
+    resp = ResponderActiveSiteResponse(location_id=HOME_SITE_ID, active_location_id=SITE_B_ID)
+    with patch.object(
+        responder_app_service, "admin_set_active_site", new=AsyncMock(return_value=resp)
+    ) as svc:
+        res = admin_client.put(
+            f"/responders/{RESPONDER_ID}/active-site".replace("/responders/", "/api/v1/responders/"),
+            json={"location_id": SITE_B_ID},
+        )
+    assert res.status_code == 200
+    assert res.json()["active_location_id"] == SITE_B_ID
+    svc.assert_awaited_once()
+
+
+def test_admin_clear_active_site(admin_client):
+    resp = ResponderActiveSiteResponse(location_id=HOME_SITE_ID, active_location_id=None)
+    with patch.object(
+        responder_app_service, "admin_set_active_site", new=AsyncMock(return_value=resp)
+    ):
+        res = admin_client.put(
+            f"/api/v1/responders/{RESPONDER_ID}/active-site",
+            json={"location_id": None},
+        )
+    assert res.status_code == 200
+    assert res.json()["active_location_id"] is None
+
+
+def test_admin_set_active_site_requires_auth(anon_client):
+    res = anon_client.put(
+        f"/api/v1/responders/{RESPONDER_ID}/active-site", json={"location_id": SITE_B_ID}
+    )
+    assert res.status_code in (401, 403)
+
+
+async def test_service_admin_clear_active_site():
+    responder = _responder()
+    responder.active_location_id = SITE_B_ID
+    cruds = _app_patches(responder=responder, open_deployment=None)
+    with cruds[0], cruds[1], cruds[2]:
+        result = await responder_app_service.admin_set_active_site(
+            responder_id=str(RESPONDER_ID), location_id=None, db=_db()
+        )
+    assert responder.active_location_id is None
+    assert result.active_location_id is None
+
+
+async def test_service_open_deployment_inactive_site_400():
+    cruds = _deployment_patches(
+        responder=_responder(), location=_location(is_active=False)
+    )
+    with cruds[0], cruds[1], cruds[2], cruds[3]:
+        with pytest.raises(HTTPException) as exc:
+            await responder_deployment_service.open_deployment(
+                db=_db(),
+                responder_id=RESPONDER_ID,
+                payload=ResponderDeploymentCreate(location_id=SITE_B_ID),
+                current_user=_admin(),
+            )
+    assert exc.value.status_code == 400
+
+
+async def test_service_open_deployment_passes_planned_ends_at():
+    from datetime import timedelta
+
+    planned = datetime.now(timezone.utc) + timedelta(days=7)
+    cruds = _deployment_patches(responder=_responder(), location=_location())
+    with cruds[0], cruds[1], cruds[2] as dep_crud, cruds[3]:
+        await responder_deployment_service.open_deployment(
+            db=_db(),
+            responder_id=RESPONDER_ID,
+            payload=ResponderDeploymentCreate(
+                location_id=SITE_B_ID, planned_ends_at=planned
+            ),
+            current_user=_admin(),
+        )
+    assert dep_crud.create.call_args.kwargs["planned_ends_at"] == planned
+
+
+async def test_service_set_active_site_inactive_target_400():
+    responder = _responder()
+    cruds = _app_patches(responder=responder, location=_location(is_active=False))
+    with cruds[0], cruds[1], cruds[2]:
+        with pytest.raises(HTTPException) as exc:
+            await responder_app_service.set_active_site(
+                responder_id=str(RESPONDER_ID), location_id=HOME_SITE_ID, db=_db()
+            )
+    assert exc.value.status_code == 400
+
+
+async def test_service_open_deployment_flushes_close_before_insert():
+    """R1 regression: within one flush SQLAlchemy emits INSERTs before UPDATEs,
+    which would trip uq_responder_deployments_one_open while the superseded
+    row still looks open. The close must flush first."""
+    responder = _responder()
+    prior = _deployment(location_id=SITE_C_ID)
+    cruds = _deployment_patches(
+        responder=responder, location=_location(), open_deployment=prior
+    )
+    db = _db()
+    parent = MagicMock()
+    with cruds[0], cruds[1], cruds[2] as dep_crud, cruds[3]:
+        parent.attach_mock(dep_crud.close, "close")
+        parent.attach_mock(dep_crud.create, "create")
+        parent.attach_mock(db.flush, "flush")
+        await responder_deployment_service.open_deployment(
+            db=db,
+            responder_id=RESPONDER_ID,
+            payload=ResponderDeploymentCreate(location_id=SITE_B_ID),
+            current_user=_admin(),
+        )
+    order = [c[0] for c in parent.mock_calls]
+    assert order.index("close") < order.index("flush") < order.index("create")

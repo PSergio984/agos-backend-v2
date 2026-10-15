@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-from app.crud import location_crud
+from app.api.v1.dependencies import CurrentUser
+from app.crud import admin_audit_log_crud, location_crud
 from app.crud import notification_delivery_crud
 from app.crud import notification_dispatch_crud
 from app.crud import responder_deployment_crud
@@ -24,7 +25,7 @@ from app.schemas import ResponderOTPVerifyResponse, AlertListItem, AlertPaginate
 from app.models.notification_template import NotificationType
 from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, ClaimResponse
-from app.schemas import ResponderActiveSiteResponse
+from app.schemas import ResponderActiveSiteResponse, AdminAuditLogCreate
 from app.models.responder_related.responders import ResponderStatus
 from app.services.websocket_service import websocket_service
 
@@ -228,7 +229,8 @@ class ResponderAppService:
 
 
     async def set_active_site(
-        self, responder_id: UUID, location_id: int, db: AsyncSession
+        self, responder_id: UUID, location_id: int, db: AsyncSession,
+        current_user: CurrentUser | None = None,
     ) -> ResponderActiveSiteResponse:
         """Presence: the responder marks which site they're on. Valid choices
         are their home site or the site of their open deployment — anything
@@ -249,13 +251,67 @@ class ResponderAppService:
                     detail="Responder is not deployed to that site.",
                 )
 
+        # Presence on a deactivated site is meaningless — applies to the home
+        # site too, since a site can be deactivated while it's someone's home.
+        target = await location_crud.get(db=db, id=location_id)
+        if target is None or not target.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="That site is not active.",
+            )
+
         responder.active_location_id = location_id
         db.add(responder)
+        if current_user is not None:
+            await admin_audit_log_crud.create_only_no_commit(
+                db=db,
+                obj_in=AdminAuditLogCreate(
+                    admin_user_id=current_user.id,
+                    action=(
+                        f"Set active site to '{target.name}' for responder "
+                        f"'{responder.first_name} {responder.last_name}'"
+                    ),
+                ),
+            )
         await db.commit()
 
         return ResponderActiveSiteResponse(
             location_id=responder.location_id,
             active_location_id=responder.active_location_id,
+        )
+
+    async def admin_set_active_site(
+        self, responder_id: UUID, location_id: int | None, db: AsyncSession,
+        current_user: CurrentUser | None = None,
+    ) -> ResponderActiveSiteResponse:
+        """Admin override of presence: NULL clears (falls back to home site);
+        a concrete site must still be one the responder is eligible for —
+        admins override *selection*, not membership."""
+        if location_id is None:
+            responder: Responder = await responder_crud.get_with_lock(db=db, id=responder_id)
+            if not responder:
+                raise HTTPException(status_code=404, detail="Responder not found.")
+            responder.active_location_id = None
+            db.add(responder)
+            if current_user is not None:
+                await admin_audit_log_crud.create_only_no_commit(
+                    db=db,
+                    obj_in=AdminAuditLogCreate(
+                        admin_user_id=current_user.id,
+                        action=(
+                            f"Cleared active site for responder "
+                            f"'{responder.first_name} {responder.last_name}'"
+                        ),
+                    ),
+                )
+            await db.commit()
+            return ResponderActiveSiteResponse(
+                location_id=responder.location_id,
+                active_location_id=None,
+            )
+        return await self.set_active_site(
+            responder_id=responder_id, location_id=location_id, db=db,
+            current_user=current_user,
         )
 
 

@@ -41,6 +41,8 @@ class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
         result = await db.execute(
             select(self.model.id, self.model.device_name)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return result.mappings().first()
@@ -86,9 +88,12 @@ class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
 
     async def get_device_config_by_location(self, db: AsyncSession, location_id: int) -> SensorConfig | None:
 
+        # Deterministic pick: oldest ACTIVE device on the site.
         sensor_device = await db.execute(
             select(self.model.sensor_config)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return sensor_device.scalars().first()
@@ -99,6 +104,8 @@ class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
         result = await db.execute(
             select(self.model.id)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return result.scalars().first()

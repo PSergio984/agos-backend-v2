@@ -121,7 +121,7 @@ async def test_create_site_initializes_fusion_state_for_new_location(monkeypatch
     )
     monkeypatch.setattr(location_crud, "get_by_name", AsyncMock(return_value=None))
     monkeypatch.setattr(
-        location_crud, "create_and_return", AsyncMock(return_value=created)
+        location_crud, "create_and_return_no_commit", AsyncMock(return_value=created)
     )
     monkeypatch.setattr(
         admin_audit_log_crud, "create_only_no_commit", AsyncMock()
@@ -149,3 +149,55 @@ async def test_create_site_initializes_fusion_state_for_new_location(monkeypatch
     assert result.id == 7
     start_state.assert_called_once()
     assert start_state.call_args.kwargs["location_id"] == 7
+
+
+async def test_device_ids_cache_tolerates_deviceless_site(monkeypatch):
+    """A newly-registered site has no devices — the cache rebuild must store
+    None ids instead of crashing the whole rebuild (which would take down
+    send_initial_data and startup fusion-state init for every site)."""
+    service = CacheService()
+    monkeypatch.setattr(location_crud, "get_all_ids", AsyncMock(return_value=[1, 3]))
+    monkeypatch.setattr(
+        sensor_device_crud,
+        "get_id_by_location",
+        AsyncMock(side_effect=lambda db, location_id: {1: 10, 3: None}[location_id]),
+    )
+    monkeypatch.setattr(
+        camera_device_crud,
+        "get_id_by_location",
+        AsyncMock(side_effect=lambda db, location_id: {1: 55, 3: None}[location_id]),
+    )
+    db = MagicMock()
+
+    await service.update_device_ids_cache(db=db)
+
+    assert service._device_ids_cache[1].sensor_device_id == 10
+    assert service._device_ids_cache[3].sensor_device_id is None
+    assert service._device_ids_cache[3].camera_device_id is None
+
+    # Same for the reverse map — a deviceless site contributes no entry.
+    await service.update_location_id_per_sensor_device_cache(db=db)
+    assert service._location_id_per_sensor_device_cache == {10: 1}
+
+
+async def test_record_reading_rejects_reading_for_inactive_site(monkeypatch):
+    """A device on a deactivated site must not record — deactivation gates
+    ingest even while the device row is still marked active."""
+    device = SimpleNamespace(id=10, location_id=3, is_active=True)
+    monkeypatch.setattr(
+        sensor_device_crud, "get_entity", AsyncMock(return_value=device)
+    )
+    monkeypatch.setattr(
+        location_crud,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(id=3, is_active=False)),
+    )
+    create = AsyncMock()
+    monkeypatch.setattr(sensor_reading_crud, "create_record", create)
+
+    result = await sensor_reading_service.record_reading(
+        db=MagicMock(), obj_in=SimpleNamespace(sensor_device_id=10)
+    )
+
+    assert "inactive" in result.status
+    create.assert_not_awaited()

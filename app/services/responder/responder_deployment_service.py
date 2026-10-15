@@ -30,6 +30,7 @@ def _to_item(deployment: ResponderDeployment, location_name: str) -> ResponderDe
         location_name=location_name,
         starts_at=deployment.starts_at,
         ends_at=deployment.ends_at,
+        planned_ends_at=deployment.planned_ends_at,
         created_by=deployment.created_by,
     )
 
@@ -68,6 +69,11 @@ class ResponderDeploymentService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Site not found.",
             )
+        if not location.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Site is inactive.",
+            )
         if payload.location_id == responder.location_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -89,12 +95,17 @@ class ResponderDeploymentService:
             if responder.active_location_id == open_deployment.location_id:
                 responder.active_location_id = None
                 db.add(responder)
+            # Flush the close BEFORE inserting the new row: a single flush
+            # emits INSERTs before UPDATEs, so Postgres would still see the
+            # old row as open and trip uq_responder_deployments_one_open.
+            await db.flush()
 
         deployment = await responder_deployment_crud.create(
             db=db,
             responder_id=responder_id,
             location_id=payload.location_id,
             created_by=current_user.id,
+            planned_ends_at=payload.planned_ends_at,
         )
         await admin_audit_log_crud.create_only_no_commit(
             db=db,

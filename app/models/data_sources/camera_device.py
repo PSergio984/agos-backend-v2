@@ -9,6 +9,7 @@ class CameraDevice(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
     device_name = Column(String(100), nullable=False)
+    stream_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, nullable=False, server_default=text("true"))
 
     location = relationship("Location", back_populates="camera_devices")

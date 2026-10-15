@@ -6,8 +6,9 @@ class LocationCoordinate(BaseModel):
     longitude: float
 
 class DevicePerLocation(BaseModel):
-    sensor_device_id: int
-    camera_device_id: int
+    # None when a site has no active device of that type (new sites start empty).
+    sensor_device_id: int | None = None
+    camera_device_id: int | None = None
 
 
 def _validate_site_name(v: str | None) -> str | None:

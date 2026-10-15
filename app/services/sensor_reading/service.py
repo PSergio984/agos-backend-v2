@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.state import fusion_state_manager
-from app.crud import sensor_reading_crud, sensor_device_crud
+from app.crud import location_crud, sensor_reading_crud, sensor_device_crud
 from app.models import SensorReading
 from app.schemas import (
     SensorReadingCreate,
@@ -96,10 +96,22 @@ class SensorReadingService:
     ) -> SensorDataRecordedResponse:
         from app.services import websocket_service
 
-        if not await sensor_device_crud.get(db=db, id=obj_in.sensor_device_id):
+        sensor_device = await sensor_device_crud.get_entity(
+            db=db, id=obj_in.sensor_device_id
+        )
+        if sensor_device is None or not sensor_device.is_active:
             return SensorDataRecordedResponse(
                 timestamp=datetime.now(timezone.utc),
                 status="Error: Sensor device not found",
+            )
+
+        # A deactivated site stops accepting readings even while its devices
+        # are still individually marked active.
+        site = await location_crud.get(db=db, id=sensor_device.location_id)
+        if site is None or not site.is_active:
+            return SensorDataRecordedResponse(
+                timestamp=datetime.now(timezone.utc),
+                status="Error: Sensor device site is inactive",
             )
 
         sensor_config = await cache_service.get_sensor_config(

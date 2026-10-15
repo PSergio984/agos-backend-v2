@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
 from app.crud import admin_audit_log_crud, camera_device_crud, location_crud
+from app.services.cache_service import cache_service
 from app.models import CameraDevice
 from app.schemas import (
     AdminAuditLogCreate,
@@ -42,7 +43,7 @@ class CameraDeviceService:
                 detail="A camera device with that name already exists on this site.",
             )
         try:
-            created = await camera_device_crud.create_and_return(db=db, obj_in=payload)
+            created = await camera_device_crud.create_and_return_no_commit(db=db, obj_in=payload)
             await admin_audit_log_crud.create_only_no_commit(
                 db=db,
                 obj_in=AdminAuditLogCreate(
@@ -61,6 +62,8 @@ class CameraDeviceService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid camera device data.",
             )
+        # A device registered at runtime must land in the device-id caches.
+        cache_service.invalidate_device_caches()
         return CameraDeviceItem.model_validate(created)
 
     async def update_device(
@@ -101,7 +104,7 @@ class CameraDeviceService:
 
         was_active = device.is_active
         try:
-            updated = await camera_device_crud.update(db=db, db_obj=device, obj_in=payload)
+            updated = await camera_device_crud.update_no_commit(db=db, db_obj=device, obj_in=payload)
             if "is_active" in changes and updated.is_active != was_active:
                 verb = "Deactivated" if not updated.is_active else "Reactivated"
             else:
@@ -121,18 +124,25 @@ class CameraDeviceService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Could not update camera device.",
             )
+        if "location_id" in changes or "is_active" in changes:
+            cache_service.invalidate_device_caches()
         return CameraDeviceItem.model_validate(updated)
 
     async def get_for_ingest(
         self, db: AsyncSession, camera_device_id: int, location_id: int
     ) -> CameraDevice | None:
-        """Return the camera iff it exists, is active, and is bound to
-        `location_id`. None on any binding failure — callers map that to
-        WS close 1008 / HTTP 400."""
+        """Return the camera iff it exists, is active, belongs to an active
+        site, and is bound to `location_id`. None on any binding failure —
+        callers map that to WS close 1008 / HTTP 400."""
         device = await camera_device_crud.get(db=db, id=camera_device_id)
         if device is None or not device.is_active:
             return None
         if device.location_id != location_id:
+            return None
+        # A deactivated site stops accepting frames even while its devices
+        # are still individually marked active.
+        site = await location_crud.get(db=db, id=device.location_id)
+        if site is None or not site.is_active:
             return None
         return device
 

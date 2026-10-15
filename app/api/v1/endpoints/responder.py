@@ -9,7 +9,8 @@ from app.api.v1.dependencies import CurrentUser, require_auth
 from app.core.database import get_db
 from app.schemas import ResponderCreate, ResponderDetailsResponse, ResponderListItem, ResponderAdminUpdate
 from app.schemas import ResponderDeploymentCreate, ResponderDeploymentItem
-from app.services import responder_service, responder_deployment_service
+from app.schemas import ResponderActiveSiteResponse, ResponderAdminActiveSiteUpdate
+from app.services import responder_service, responder_deployment_service, responder_app_service
 
 router = APIRouter(prefix="/responders", tags=["responders"])
 
@@ -30,8 +31,8 @@ async def download_responder_template():
     ws = wb.active
     ws.title = "Responders"
 
-    headers = ["First Name", "Last Name", "Phone Number"]
-    widths = [20, 20, 25]
+    headers = ["First Name", "Last Name", "Phone Number", "Location ID"]
+    widths = [20, 20, 25, 12]
 
     header_font = Font(bold=True)
     header_fill = PatternFill(start_color="E0E0E0", end_color="E0E0E0", fill_type="solid")
@@ -114,4 +115,19 @@ async def close_responder_deployment(
 ) -> ResponderDeploymentItem:
     return await responder_deployment_service.close_deployment(
         db=db, responder_id=responder_id, deployment_id=deployment_id, current_user=current_user
+    )
+
+
+# Admin presence override: set a responder's active site (must still be a
+# site they're eligible for) or clear it (null → falls back to home site).
+@router.put("/{responder_id}/active-site", response_model=ResponderActiveSiteResponse)
+async def admin_set_active_site(
+    responder_id: UUID,
+    payload: ResponderAdminActiveSiteUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_auth),
+) -> ResponderActiveSiteResponse:
+    return await responder_app_service.admin_set_active_site(
+        db=db, responder_id=responder_id, location_id=payload.location_id,
+        current_user=current_user,
     )

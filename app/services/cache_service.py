@@ -56,6 +56,22 @@ class CacheService:
         self._device_ids_cache = device_ids_cache
 
 
+    def invalidate_device_caches(self) -> None:
+        """Device registrations/reassignments/deactivations at runtime must
+        drop the startup-built caches so the next read rebuilds them."""
+        self._device_ids_cache = None
+        self._location_id_per_sensor_device_cache = None
+
+
+    def invalidate_location_caches(self) -> None:
+        """Site create/update/deactivate at runtime must drop the startup-built
+        caches: device map (the new site needs a row), coordinate list (weather
+        fetch and summary loops iterate it)."""
+        self._device_ids_cache = None
+        self._location_id_per_sensor_device_cache = None
+        self._location_coordinates_cache = None
+
+
     # unmutable cache
     """
         1. Gets all location IDs
@@ -69,7 +85,8 @@ class CacheService:
         location_id_per_sensor_device_cache = {}
         for loc_id in location_ids:
             sensor_device_id = await sensor_device_crud.get_id_by_location(db=db, location_id=loc_id)
-            location_id_per_sensor_device_cache[sensor_device_id] = loc_id
+            if sensor_device_id is not None:
+                location_id_per_sensor_device_cache[sensor_device_id] = loc_id
         self._location_id_per_sensor_device_cache = location_id_per_sensor_device_cache
 
 

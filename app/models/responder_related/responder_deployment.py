@@ -25,6 +25,7 @@ class ResponderDeployment(Base):
         nullable=False,
     )
     ends_at = Column(DateTime(timezone=True), nullable=True)
+    planned_ends_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("admin_users.id"), nullable=False)
 
     responder = relationship("Responder", back_populates="deployments")

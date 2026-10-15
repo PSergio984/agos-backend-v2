@@ -15,12 +15,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _resolve_responder_location_id(websocket: WebSocket, token: str) -> int | None:
+    """Decode a responder JWT and return their effective site id, or close the
+    socket (1008) and return None on any failure."""
+    from jose import jwt, JWTError
+    from app.core.config import settings
+    from app.crud import responder_crud
+    from app.models.responder_related.responders import ResponderStatus
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        responder_id = payload.get("sub")
+        if not responder_id or payload.get("type") != "responder":
+            raise JWTError("not a responder token")
+    except JWTError:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token"
+        )
+        return None
+
+    async with AsyncSessionLocal() as db:
+        responder = await responder_crud.get(db=db, id=responder_id)
+    if responder is None or responder.status != ResponderStatus.ACTIVE:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Responder not active"
+        )
+        return None
+
+    return responder.active_location_id or responder.location_id
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
 
     location_id = websocket.query_params.get("location_id")
+    token = websocket.query_params.get("token")
 
     await websocket.accept()
+
+    # Presence-derived channel: a responder token pins the subscription to
+    # their effective site (active ?? home), overriding whatever the client
+    # asked for. No token → legacy client-chosen channel (PWA/admin viewers).
+    if token:
+        location_id = await _resolve_responder_location_id(websocket=websocket, token=token)
+        if location_id is None:
+            return  # socket already closed
 
     if not location_id:
         await websocket.close(

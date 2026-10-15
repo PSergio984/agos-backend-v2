@@ -11,11 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, WebSocketDisconnect
-from fastapi.testclient import TestClient
 
-from app.main import app
-from app.api.v1.dependencies import CurrentUser, require_auth, require_iot_api_key
-from app.core.database import get_db
+from app.api.v1.dependencies import CurrentUser
 from app.models import SensorConfig
 from app.schemas import CameraDeviceItem, SensorDeviceItem
 from app.services.camera_device_service import camera_device_service
@@ -32,41 +29,7 @@ SENSOR_ITEM = SensorDeviceItem(
     id=1, device_name="Sensor A", location_id=1,
     sensor_config=SensorConfig(**SENSOR_CFG), is_active=True,
 )
-CAMERA_ITEM = CameraDeviceItem(id=1, device_name="Cam A", location_id=1, is_active=True)
-
-
-@pytest.fixture()
-def authed_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[require_auth] = lambda: CurrentUser(
-        id=str(ADMIN_ID), is_superuser=True, is_enabled=True, force_password_change=False
-    )
-    app.dependency_overrides[get_db] = _fake_db
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture()
-def anon_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[get_db] = _fake_db
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture()
-def iot_client():
-    async def _fake_db():
-        yield MagicMock()
-
-    app.dependency_overrides[get_db] = _fake_db
-    app.dependency_overrides[require_iot_api_key] = lambda: None
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+CAMERA_ITEM = CameraDeviceItem(id=1, device_name="Cam A", location_id=1, stream_url=None, is_active=True)
 
 
 # ---------------------------------------------------------------------------
@@ -74,11 +37,11 @@ def iot_client():
 # ---------------------------------------------------------------------------
 
 
-def test_register_sensor_device_success(authed_client):
+def test_register_sensor_device_success(admin_client):
     with patch.object(
         sensor_device_service, "register_device", new=AsyncMock(return_value=SENSOR_ITEM)
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/sensor-devices",
             json={"device_name": "Sensor A", "location_id": 1, "sensor_config": SENSOR_CFG},
         )
@@ -95,73 +58,73 @@ def test_register_sensor_device_requires_auth(anon_client):
     assert res.status_code in (401, 403)
 
 
-def test_register_sensor_device_unknown_location_returns_404(authed_client):
+def test_register_sensor_device_unknown_location_returns_404(admin_client):
     with patch.object(
         sensor_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Site not found.")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/sensor-devices",
             json={"device_name": "Sensor A", "location_id": 99, "sensor_config": SENSOR_CFG},
         )
     assert res.status_code == 404
 
 
-def test_register_sensor_device_inactive_location_returns_400(authed_client):
+def test_register_sensor_device_inactive_location_returns_400(admin_client):
     with patch.object(
         sensor_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=400, detail="Site is inactive.")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/sensor-devices",
             json={"device_name": "Sensor A", "location_id": 2, "sensor_config": SENSOR_CFG},
         )
     assert res.status_code == 400
 
 
-def test_register_sensor_device_duplicate_name_same_site_returns_409(authed_client):
+def test_register_sensor_device_duplicate_name_same_site_returns_409(admin_client):
     with patch.object(
         sensor_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=409, detail="dup")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/sensor-devices",
             json={"device_name": "Sensor A", "location_id": 1, "sensor_config": SENSOR_CFG},
         )
     assert res.status_code == 409
 
 
-def test_list_sensor_devices_filters_by_location(authed_client):
+def test_list_sensor_devices_filters_by_location(admin_client):
     mock = AsyncMock(return_value=[SENSOR_ITEM])
     with patch.object(sensor_device_service, "list_devices", new=mock):
-        res = authed_client.get("/api/v1/sensor-devices?location_id=1")
+        res = admin_client.get("/api/v1/sensor-devices?location_id=1")
 
     assert res.status_code == 200
     assert res.json()[0]["device_name"] == "Sensor A"
     assert mock.await_args.kwargs["location_id"] == 1
 
 
-def test_deactivate_sensor_device(authed_client):
+def test_deactivate_sensor_device(admin_client):
     deactivated = SENSOR_ITEM.model_copy(update={"is_active": False})
     with patch.object(
         sensor_device_service, "update_device", new=AsyncMock(return_value=deactivated)
     ):
-        res = authed_client.put("/api/v1/sensor-devices/1", json={"is_active": False})
+        res = admin_client.put("/api/v1/sensor-devices/1", json={"is_active": False})
 
     assert res.status_code == 200
     assert res.json()["is_active"] is False
 
 
-def test_update_sensor_device_not_found_returns_404(authed_client):
+def test_update_sensor_device_not_found_returns_404(admin_client):
     with patch.object(
         sensor_device_service,
         "update_device",
         new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Sensor device not found.")),
     ):
-        res = authed_client.put("/api/v1/sensor-devices/99", json={"is_active": False})
+        res = admin_client.put("/api/v1/sensor-devices/99", json={"is_active": False})
     assert res.status_code == 404
 
 
@@ -170,11 +133,11 @@ def test_update_sensor_device_not_found_returns_404(authed_client):
 # ---------------------------------------------------------------------------
 
 
-def test_register_camera_device_success(authed_client):
+def test_register_camera_device_success(admin_client):
     with patch.object(
         camera_device_service, "register_device", new=AsyncMock(return_value=CAMERA_ITEM)
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/camera-devices",
             json={"device_name": "Cam A", "location_id": 1},
         )
@@ -183,12 +146,12 @@ def test_register_camera_device_success(authed_client):
     assert res.json()["location_id"] == 1
 
 
-def test_second_camera_same_site_ok(authed_client):
+def test_second_camera_same_site_ok(admin_client):
     second = CAMERA_ITEM.model_copy(update={"id": 2, "device_name": "Cam B"})
     with patch.object(
         camera_device_service, "register_device", new=AsyncMock(return_value=second)
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/camera-devices",
             json={"device_name": "Cam B", "location_id": 1},
         )
@@ -202,70 +165,70 @@ def test_register_camera_device_requires_auth(anon_client):
     assert res.status_code in (401, 403)
 
 
-def test_register_camera_device_unknown_location_returns_404(authed_client):
+def test_register_camera_device_unknown_location_returns_404(admin_client):
     with patch.object(
         camera_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Site not found.")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/camera-devices", json={"device_name": "Cam A", "location_id": 99}
         )
     assert res.status_code == 404
 
 
-def test_register_camera_device_inactive_location_returns_400(authed_client):
+def test_register_camera_device_inactive_location_returns_400(admin_client):
     with patch.object(
         camera_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=400, detail="Site is inactive.")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/camera-devices", json={"device_name": "Cam A", "location_id": 2}
         )
     assert res.status_code == 400
 
 
-def test_register_camera_device_duplicate_name_same_site_returns_409(authed_client):
+def test_register_camera_device_duplicate_name_same_site_returns_409(admin_client):
     with patch.object(
         camera_device_service,
         "register_device",
         new=AsyncMock(side_effect=HTTPException(status_code=409, detail="dup")),
     ):
-        res = authed_client.post(
+        res = admin_client.post(
             "/api/v1/camera-devices", json={"device_name": "Cam A", "location_id": 1}
         )
     assert res.status_code == 409
 
 
-def test_list_camera_devices_filters_by_location(authed_client):
+def test_list_camera_devices_filters_by_location(admin_client):
     mock = AsyncMock(return_value=[CAMERA_ITEM])
     with patch.object(camera_device_service, "list_devices", new=mock):
-        res = authed_client.get("/api/v1/camera-devices?location_id=1")
+        res = admin_client.get("/api/v1/camera-devices?location_id=1")
 
     assert res.status_code == 200
     assert res.json()[0]["device_name"] == "Cam A"
     assert mock.await_args.kwargs["location_id"] == 1
 
 
-def test_deactivate_camera_device(authed_client):
+def test_deactivate_camera_device(admin_client):
     deactivated = CAMERA_ITEM.model_copy(update={"is_active": False})
     with patch.object(
         camera_device_service, "update_device", new=AsyncMock(return_value=deactivated)
     ):
-        res = authed_client.put("/api/v1/camera-devices/1", json={"is_active": False})
+        res = admin_client.put("/api/v1/camera-devices/1", json={"is_active": False})
 
     assert res.status_code == 200
     assert res.json()["is_active"] is False
 
 
-def test_update_camera_device_not_found_returns_404(authed_client):
+def test_update_camera_device_not_found_returns_404(admin_client):
     with patch.object(
         camera_device_service,
         "update_device",
         new=AsyncMock(side_effect=HTTPException(status_code=404, detail="Camera device not found.")),
     ):
-        res = authed_client.put("/api/v1/camera-devices/99", json={"device_name": "X"})
+        res = admin_client.put("/api/v1/camera-devices/99", json={"device_name": "X"})
     assert res.status_code == 404
 
 
@@ -291,6 +254,7 @@ def _device(**overrides):
     d.id = 1
     d.device_name = "Cam A"
     d.location_id = 1
+    d.stream_url = None
     d.is_active = True
     for k, v in overrides.items():
         setattr(d, k, v)
@@ -304,9 +268,9 @@ def _service_patches(location=None, clash=None, created=None, device=None):
             f"{MODULE}.camera_device_crud",
             **{
                 "get_by_name_and_location": AsyncMock(return_value=clash),
-                "create_and_return": AsyncMock(return_value=created),
+                "create_and_return_no_commit": AsyncMock(return_value=created),
                 "get": AsyncMock(return_value=device),
-                "update": AsyncMock(return_value=device),
+                "update_no_commit": AsyncMock(return_value=device),
             },
         ),
         patch(
@@ -431,11 +395,28 @@ async def test_service_update_camera_not_found_404():
 
 async def test_get_for_ingest_returns_device_when_bound():
     device = _device(location_id=1)
-    with patch(f"{MODULE}.camera_device_crud", **{"get": AsyncMock(return_value=device)}):
+    site = MagicMock(id=1, is_active=True)
+    with (
+        patch(f"{MODULE}.camera_device_crud", **{"get": AsyncMock(return_value=device)}),
+        patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}),
+    ):
         result = await camera_device_service.get_for_ingest(
             db=AsyncMock(), camera_device_id=1, location_id=1
         )
     assert result is device
+
+
+async def test_get_for_ingest_rejects_inactive_site():
+    device = _device(location_id=1)
+    site = MagicMock(id=1, is_active=False)
+    with (
+        patch(f"{MODULE}.camera_device_crud", **{"get": AsyncMock(return_value=device)}),
+        patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}),
+    ):
+        result = await camera_device_service.get_for_ingest(
+            db=AsyncMock(), camera_device_id=1, location_id=1
+        )
+    assert result is None
 
 
 async def test_get_for_ingest_rejects_site_mismatch():
@@ -547,3 +528,72 @@ def test_ws_rpi_bound_device_connects(anon_client):
             assert msg == {"type": "connected", "camera_device_id": 1, "location_id": 2}
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
+
+
+# ---------------------------------------------------------------------------
+# /ws presence derivation — a responder token pins the channel to their
+# effective site; unauthenticated clients keep the client-chosen channel.
+# ---------------------------------------------------------------------------
+
+
+def _responder_jwt(responder_id: uuid.UUID) -> str:
+    from jose import jwt
+    from app.core.config import settings
+
+    return jwt.encode(
+        {"sub": str(responder_id), "type": "responder"},
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def test_ws_token_derives_channel_from_active_site(anon_client):
+    responder = MagicMock()
+    responder.active_location_id = 3
+    responder.location_id = 1
+    from app.models.responder_related.responders import ResponderStatus
+
+    responder.status = ResponderStatus.ACTIVE
+
+    session = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=cm)
+
+    with (
+        patch("app.api.v1.endpoints.websocket.AsyncSessionLocal", new=factory),
+        patch(
+            "app.api.v1.endpoints.websocket.websocket_service.send_initial_data",
+            new=AsyncMock(),
+        ) as send_init,
+        patch("app.crud.responder_crud.get", new=AsyncMock(return_value=responder)),
+    ):
+        with anon_client.websocket_connect(
+            f"/ws?location_id=99&token={_responder_jwt(uuid.uuid4())}"
+        ):
+            pass
+
+    # responder_crud.get is patched at its definition site; the function under
+    # test imports it inside _resolve_responder_location_id.
+    assert send_init.await_args.kwargs["location_id"] == 3
+
+
+def test_ws_invalid_token_closes_1008(anon_client):
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with anon_client.websocket_connect("/ws?location_id=1&token=bad") as ws:
+            ws.receive_json()
+    assert exc.value.code == 1008
+
+
+def test_ws_no_token_keeps_client_chosen_channel(anon_client):
+    with (
+        patch(
+            "app.api.v1.endpoints.websocket.websocket_service.send_initial_data",
+            new=AsyncMock(),
+        ) as send_init,
+    ):
+        with anon_client.websocket_connect("/ws?location_id=7"):
+            pass
+
+    assert send_init.await_args.kwargs["location_id"] == 7

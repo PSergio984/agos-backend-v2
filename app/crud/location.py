@@ -10,7 +10,10 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
     async def get_default_location(self, db: AsyncSession) -> Location | None:
 
         result = await db.execute(
-            select(self.model.id, self.model.name).limit(1)
+            select(self.model.id, self.model.name)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
+            .limit(1)
         )
         return result.mappings().first()
 

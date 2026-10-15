@@ -11,11 +11,14 @@ router = APIRouter(prefix="/locations", tags=["locations"])
 
 @router.get("", response_model=list[LocationResponse])
 async def list_sites(
+    include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
 ) -> list[LocationResponse]:
     """Public: the site pickers (admin view scope + responder presence) need
-    the registry without admin credentials — same exposure as sensor config."""
-    return await location_service.list_sites(db=db)
+    the registry without admin credentials — same exposure as sensor config.
+    Defaults to active sites only; the admin registry passes
+    include_inactive=true for the full list."""
+    return await location_service.list_sites(db=db, include_inactive=include_inactive)
 
 
 @router.post("", response_model=LocationResponse, status_code=201)

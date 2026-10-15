@@ -135,6 +135,7 @@ class ResponderDetailsResponse(BaseModel):
 # other than the responder's home site (responder_deployments table).
 class ResponderDeploymentCreate(BaseModel):
     location_id: int
+    planned_ends_at: datetime | None = None  # optional planned end of the posting
 
 
 class ResponderDeploymentItem(BaseModel):
@@ -143,6 +144,7 @@ class ResponderDeploymentItem(BaseModel):
     location_name: str
     starts_at: datetime
     ends_at: datetime | None
+    planned_ends_at: datetime | None
     created_by: UUID
 
 
@@ -170,6 +172,12 @@ class ResponderActiveSiteUpdate(BaseModel):
 class ResponderActiveSiteResponse(BaseModel):
     location_id: int
     active_location_id: int | None
+
+
+# Admin override of presence — unlike the responder's own update this allows
+# null, which clears the override back to the home-site fallback.
+class ResponderAdminActiveSiteUpdate(BaseModel):
+    location_id: int | None = None
 
 
 class NotifPreferenceUpdateRequest(BaseModel):

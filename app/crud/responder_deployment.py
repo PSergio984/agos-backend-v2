@@ -17,12 +17,14 @@ class CRUDResponderDeployment(CRUDBase[ResponderDeployment, None, None]):
         responder_id: UUID,
         location_id: int,
         created_by: UUID,
+        planned_ends_at: datetime | None = None,
     ) -> ResponderDeployment:
 
         deployment = self.model(
             responder_id=responder_id,
             location_id=location_id,
             created_by=created_by,
+            planned_ends_at=planned_ends_at,
         )
         db.add(deployment)
         await db.flush()  # populate id + server-default starts_at; committed at the service layer

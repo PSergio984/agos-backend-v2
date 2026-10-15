@@ -26,10 +26,13 @@ class CRUDCameraDevice(CRUDBase[CameraDevice, None, None]):
 
 
     async def get_default_camera_by_location(self, db: AsyncSession, location_id: int) -> CameraDevice | None:
-        
+
+        # Deterministic pick: oldest ACTIVE device on the site.
         result = await db.execute(
             select(self.model.id, self.model.device_name)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return result.mappings().first()
@@ -40,6 +43,8 @@ class CRUDCameraDevice(CRUDBase[CameraDevice, None, None]):
         result = await db.execute(
             select(self.model.id)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         camera_device = result.scalars().first()
