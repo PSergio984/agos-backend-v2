@@ -6,6 +6,7 @@ from .location import location_crud
 from .model_readings import model_readings_crud
 from .responder_group import responder_group_crud
 from .responder import responder_crud
+from .responder_deployment import responder_deployment_crud
 from .responder_otp_verification import responder_otp_verification_crud
 from .sensor_device import sensor_device_crud
 from .sensor_reading import sensor_reading_crud

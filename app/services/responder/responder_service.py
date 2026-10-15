@@ -20,6 +20,7 @@ class ResponderService:
                 last_name=r.last_name,
                 phone_number=r.phone_number,
                 status=r.status,
+                location_id=r.location_id,
                 has_push_subscription=r.id in ids_with_push,
             )
             for r in responders
@@ -69,6 +70,7 @@ class ResponderService:
                 last_name=responder.last_name,
                 phone_number=responder.phone_number,
                 status=responder.status,
+                location_id=responder.location_id,
                 has_push_subscription=False,  # newly created responders have no subscriptions yet
             ) for responder in created_responders
         ]
@@ -98,6 +100,7 @@ class ResponderService:
             last_name=updated.last_name,
             phone_number=updated.phone_number,
             status=updated.status,
+            location_id=updated.location_id,
             has_push_subscription=has_push.scalar() is not None,
         )
 

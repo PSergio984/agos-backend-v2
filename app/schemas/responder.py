@@ -116,6 +116,7 @@ class ResponderListItem(BaseModel):
     last_name: str
     phone_number: str
     status: ResponderStatus
+    location_id: int
     has_push_subscription: bool = False
 
     class Config:
@@ -130,6 +131,21 @@ class ResponderDetailsResponse(BaseModel):
         from_attributes = True
 
 
+# Admin-managed membership: a deployment is a temporary posting to a site
+# other than the responder's home site (responder_deployments table).
+class ResponderDeploymentCreate(BaseModel):
+    location_id: int
+
+
+class ResponderDeploymentItem(BaseModel):
+    id: int
+    location_id: int
+    location_name: str
+    starts_at: datetime
+    ends_at: datetime | None
+    created_by: UUID
+
+
 # For responders app
 class ResponderDetails(BaseModel):
     id: str
@@ -139,8 +155,21 @@ class ResponderDetails(BaseModel):
     phone_number: str
     location_id: int
     location_name: str
+    active_location_id: int | None
+    active_location_name: str | None
     created_at: datetime
     activated_at: datetime | None
+
+
+# Responder-controlled presence: which eligible site (home or open
+# deployment) the responder is currently on.
+class ResponderActiveSiteUpdate(BaseModel):
+    location_id: int
+
+
+class ResponderActiveSiteResponse(BaseModel):
+    location_id: int
+    active_location_id: int | None
 
 
 class NotifPreferenceUpdateRequest(BaseModel):

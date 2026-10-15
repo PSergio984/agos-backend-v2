@@ -9,6 +9,7 @@ from .admin_audit_log_service import admin_audit_log_service
 from .daily_summary import daily_summary_service
 from .responder import responder_service
 from .responder import responder_app_service
+from .responder import responder_deployment_service
 from .ml_service import ml_service
 from .system_settings_service import system_settings_service
 from .upload_service import upload_service
