@@ -63,6 +63,15 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _sync_url(url: str) -> str:
+    """Alembic runs a sync engine; the app's asyncpg URL must be swapped
+    to a sync driver (psycopg2) for migrations. asyncpg spells TLS as
+    ``ssl``, libpq as ``sslmode`` — translate both."""
+    return url.replace("+asyncpg", "+psycopg2").replace(
+        "ssl=require", "sslmode=require"
+    )
+
+
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
@@ -71,7 +80,7 @@ def run_migrations_online() -> None:
 
     """
     connectable = engine_from_config(
-        {"sqlalchemy.url": settings.DATABASE_URL},
+        {"sqlalchemy.url": _sync_url(settings.DATABASE_URL)},
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
