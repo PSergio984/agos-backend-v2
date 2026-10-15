@@ -158,6 +158,7 @@ class AlertListItem(BaseModel):
     is_acknowledged: bool
     acknowledged_at: datetime | None
     acknowledge_message: str | None
+    location_id: int | None = None
     claimed_by: UUID | None = None
     claimed_by_name: str | None = None
     claimed_at: datetime | None = None

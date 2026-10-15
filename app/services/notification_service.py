@@ -12,6 +12,7 @@ from app.crud import (
     notification_dispatch_crud,
     notification_template_crud,
     push_subscription_crud,
+    responder_crud,
 )
 from app.models.notification_template import NotificationTemplate, NotificationType
 from app.models.responder_related.notification_delivery import DeliveryStatus
@@ -33,11 +34,24 @@ class NotificationService:
         db: AsyncSession,
         *,
         system_initiated: bool = False,
+        location_id: int | None = None,
     ) -> None:
-        
+
         responder_ids = list(dict.fromkeys(payload.responder_ids))
         if not responder_ids:
             return
+
+        # Site-scoped dispatch: deliver only to responders whose effective site
+        # (active_location_id ?? location_id) matches. A NULL location_id is a
+        # global announcement — the given ids are delivered regardless of site.
+        if location_id is not None:
+            responder_ids = await responder_crud.get_ids_in_effective_location(
+                db=db,
+                responder_ids=responder_ids,
+                location_id=location_id,
+            )
+            if not responder_ids:
+                return
 
         notif_title, notif_message, notif_type = await self._resolve_notification_content(
             payload=payload,
@@ -49,6 +63,7 @@ class NotificationService:
             notif_type=notif_type,
             title=notif_title,
             message=notif_message,
+            location_id=location_id,
         )
 
         deliveries_by_responder: dict[UUID, dict] = {
@@ -142,6 +157,7 @@ class NotificationService:
 
         dispatch = await notification_dispatch_crud.create_for_send(
             db=db, notif_type=notif_type, title=title, message=message,
+            location_id=location_id,
         )
         # Capture the PK after flush, before commit expires the ORM instance.
         dispatch_id = dispatch.id

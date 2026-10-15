@@ -117,6 +117,7 @@ class ResponderAppService:
                     is_acknowledged=delivery.acknowledgement is not None,
                     acknowledged_at=delivery.acknowledgement.acknowledged_at if delivery.acknowledgement else None,
                     acknowledge_message=delivery.acknowledgement.message if delivery.acknowledgement else None,
+                    location_id=delivery.dispatch.location_id,
                     claimed_by=delivery.dispatch.claimed_by,
                     claimed_by_name=(
                         f"{delivery.dispatch.claimed_by_responder.first_name} "
@@ -269,9 +270,6 @@ class ResponderAppService:
 
 
     async def verify_otp(self, verify_request: ResponderOTPVerifyRequest, db: AsyncSession):
-        # Get active group first (this may commit internally, so do it before transaction)
-        active_group = await responder_group_crud.ensure_exists(db=db, name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME)
-        
         record = await responder_otp_verification_crud.get_by_responder_id(
             db=db, 
             responder_id=verify_request.responder_id
@@ -313,6 +311,14 @@ class ResponderAppService:
         # Success - activate and add to group only if still pending (active responders re-logging in skip this)
         responder = await responder_crud.get(db=db, id=verify_request.responder_id)
         if responder.status == ResponderStatus.PENDING:
+            # Join the site's own "All Active Responders" group (home site, not
+            # the legacy NULL group). ensure_exists may commit internally, so it
+            # runs before the staged writes below.
+            active_group = await responder_group_crud.ensure_exists(
+                db=db,
+                name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
+                location_id=responder.location_id,
+            )
             await responder_crud.activate(db=db, responder_id=verify_request.responder_id, commit=False)
             await responder_group_crud.add_member(db=db, group_id=active_group.id, responder_id=verify_request.responder_id, commit=False)
         await responder_otp_verification_crud.delete_by_responder_id(db=db, responder_id=verify_request.responder_id)

@@ -43,6 +43,7 @@ class DeliveryLogItem(BaseModel):
     title: str
     message: str
     dispatched_at: datetime
+    location_id: int | None = None
     is_acknowledged: bool
     acknowledged_at: datetime | None
     acknowledge_message: str | None
