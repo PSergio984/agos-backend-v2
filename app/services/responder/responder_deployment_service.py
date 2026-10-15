@@ -56,7 +56,8 @@ class ResponderDeploymentService:
         current_user: CurrentUser,
     ) -> ResponderDeploymentItem:
         # Lock the responder row so open/close/active-site can't interleave —
-        # "at most one open deployment" is enforced here, not by a constraint.
+        # "at most one open deployment" is enforced here under the responder's
+        # row lock AND by uq_responder_deployments_one_open (partial index).
         responder = await responder_crud.get_with_lock(db=db, id=responder_id)
         if responder is None:
             raise HTTPException(
