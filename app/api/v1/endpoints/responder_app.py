@@ -6,6 +6,7 @@ from uuid import UUID
 from app.schemas import ResponderDetails, NotifPreferenceUpdateRequest, AlertPaginatedResponse, ResponderSelfUpdate
 from app.schemas import ResponderForApproval, ResponderOTPDispatchResponse, ResponderOTPVerifyRequest, ResponderOTPVerifyResponse, ResponderSendSMSRequest, ResponderRegistrationRequest
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse
+from app.schemas import ClaimRequest, ClaimResponse
 from app.models.responder_related.responders import NotificationPreference
 from app.models.notification_template import NotificationType
 from app.services import responder_app_service
@@ -76,6 +77,22 @@ async def acknowledge_alert(
 
     _validate_responder_id(current_responder, payload.responder_id)
     return await responder_app_service.acknowledge_alert(payload=payload, db=db)
+
+
+@router.post("/claim", response_model=ClaimResponse)
+@limiter.limit("20/minute")
+async def claim_alert(
+    request: Request,
+    payload: ClaimRequest,
+    current_responder: CurrentResponder = Depends(require_responder_auth),
+    db: AsyncSession = Depends(get_db)) -> ClaimResponse:
+
+    # Identity comes from the token only — a responder can't claim as someone else.
+    return await responder_app_service.claim_alert(
+        dispatch_id=payload.dispatch_id,
+        current_responder=current_responder,
+        db=db,
+    )
 
 
 @router.get("/notif-preferences/{responder_id}", response_model=NotificationPreference)

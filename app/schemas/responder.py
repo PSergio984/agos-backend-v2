@@ -149,6 +149,7 @@ class NotifPreferenceUpdateRequest(BaseModel):
 
 class AlertListItem(BaseModel):
     id: UUID
+    dispatch_id: int
     type: NotificationType
     title: str
     message: str
@@ -156,6 +157,9 @@ class AlertListItem(BaseModel):
     is_acknowledged: bool
     acknowledged_at: datetime | None
     acknowledge_message: str | None
+    claimed_by: UUID | None = None
+    claimed_by_name: str | None = None
+    claimed_at: datetime | None = None
 
 
 class AlertPaginatedResponse(BaseModel):
@@ -172,3 +176,14 @@ class AcknowledgeNotifRequest(BaseModel):
 class AcknowledgeNotifResponse(BaseModel):
     acknowledged_at: datetime
     acknowledge_message: str | None = None
+
+
+class ClaimRequest(BaseModel):
+    dispatch_id: int
+
+
+class ClaimResponse(BaseModel):
+    dispatch_id: int
+    claimed_by: UUID
+    claimed_by_name: str
+    claimed_at: datetime

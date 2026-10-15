@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from app.crud import notification_delivery_crud
+from app.crud import notification_dispatch_crud
 from app.crud import responder_otp_verification_crud
 from app.crud.responder_group import responder_group_crud
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +21,9 @@ from app.crud.responder import responder_crud
 from app.schemas import ResponderOTPVerifyResponse, AlertListItem, AlertPaginatedResponse
 from app.models.notification_template import NotificationType
 from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
-from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse
+from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, ClaimResponse
 from app.models.responder_related.responders import ResponderStatus
+from app.services.websocket_service import websocket_service
 
 
 class ResponderAppService:
@@ -107,13 +109,22 @@ class ResponderAppService:
             items=[
                 AlertListItem(
                     id=delivery.id,
+                    dispatch_id=delivery.dispatch.id,
                     type=delivery.dispatch.type,
                     title=delivery.dispatch.title,
                     message=delivery.dispatch.message,
                     timestamp=delivery.sent_at,
                     is_acknowledged=delivery.acknowledgement is not None,
                     acknowledged_at=delivery.acknowledgement.acknowledged_at if delivery.acknowledgement else None,
-                    acknowledge_message=delivery.acknowledgement.message if delivery.acknowledgement else None
+                    acknowledge_message=delivery.acknowledgement.message if delivery.acknowledgement else None,
+                    claimed_by=delivery.dispatch.claimed_by,
+                    claimed_by_name=(
+                        f"{delivery.dispatch.claimed_by_responder.first_name} "
+                        f"{delivery.dispatch.claimed_by_responder.last_name}"
+                        if delivery.dispatch.claimed_by_responder
+                        else None
+                    ),
+                    claimed_at=delivery.dispatch.claimed_at,
                 ) for delivery in deliveries
             ],
             has_more=has_more,
@@ -143,6 +154,63 @@ class ResponderAppService:
         return AcknowledgeNotifResponse(
             acknowledged_at=ack.acknowledged_at,
             acknowledge_message=ack.message
+        )
+
+
+    async def claim_alert(
+        self,
+        dispatch_id: int,
+        current_responder: Responder,
+        db: AsyncSession,
+    ) -> ClaimResponse:
+        """"On it" claim — marks the shared dispatch as taken by this responder
+        and broadcasts it to the location so nobody else drives out."""
+        # Lock the row so two concurrent claims can't both pass the checks.
+        dispatch = await notification_dispatch_crud.get_with_lock(db=db, id=dispatch_id)
+        # Mirror acknowledge_alert: a responder can only act on a dispatch they
+        # were actually sent — unknown/foreign ids get the same 404.
+        delivery = await notification_delivery_crud.get_for_responder_dispatch(
+            db=db, dispatch_id=dispatch_id, responder_id=current_responder.id
+        )
+        if dispatch is None or delivery is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+        if dispatch.type != NotificationType.BLOCKAGE:
+            raise HTTPException(
+                status_code=403, detail="Alerts of this type cannot be claimed."
+            )
+        if dispatch.claimed_by is not None:
+            raise HTTPException(
+                status_code=409, detail="This alert has already been claimed."
+            )
+        if await notification_delivery_crud.dispatch_has_acknowledgement(
+            db=db, dispatch_id=dispatch_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="This alert has already been handled."
+            )
+
+        responder: Responder = await responder_crud.get(db=db, id=current_responder.id)
+        dispatch.claimed_by = responder.id
+        dispatch.claimed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        claimer_name = f"{responder.first_name} {responder.last_name}"
+        await websocket_service.broadcast_update(
+            "alert_claimed",
+            {
+                "dispatch_id": dispatch.id,
+                "claimed_by": str(responder.id),
+                "claimed_by_name": claimer_name,
+                "claimed_at": dispatch.claimed_at.isoformat(),
+            },
+            location_id=responder.location_id,
+        )
+
+        return ClaimResponse(
+            dispatch_id=dispatch.id,
+            claimed_by=responder.id,
+            claimed_by_name=claimer_name,
+            claimed_at=dispatch.claimed_at,
         )
 
 

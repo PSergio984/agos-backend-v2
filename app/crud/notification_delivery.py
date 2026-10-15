@@ -52,7 +52,9 @@ class CRUDNotificationDelivery(CRUDBase):
         stmt = (
             select(self.model)
             .options(
-                joinedload(NotificationDelivery.dispatch),
+                joinedload(NotificationDelivery.dispatch).joinedload(
+                    NotificationDispatch.claimed_by_responder
+                ),
                 joinedload(NotificationDelivery.acknowledgement),
             )
             .where(NotificationDelivery.responder_id == responder_id)
@@ -75,6 +77,35 @@ class CRUDNotificationDelivery(CRUDBase):
 
         return items, has_more
 
+
+    async def get_for_responder_dispatch(
+        self, db: AsyncSession, dispatch_id: int, responder_id: UUID
+    ) -> NotificationDelivery | None:
+        """The delivery row tying this responder to this dispatch — None when
+        the alert was never sent to them (used to gate claims)."""
+        result = await db.execute(
+            select(NotificationDelivery).where(
+                NotificationDelivery.dispatch_id == dispatch_id,
+                NotificationDelivery.responder_id == responder_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def dispatch_has_acknowledgement(
+        self, db: AsyncSession, dispatch_id: int
+    ) -> bool:
+        """True if ANY delivery of this dispatch has been acknowledged —
+        used by the claim flow: already-handled alerts can't be claimed."""
+        stmt = (
+            select(func.count(Acknowledgement.id))
+            .join(
+                NotificationDelivery,
+                Acknowledgement.delivery_id == NotificationDelivery.id,
+            )
+            .where(NotificationDelivery.dispatch_id == dispatch_id)
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar_one()) > 0
 
     async def get_unread_alerts_count(self, responder_id: UUID, db: AsyncSession) -> int:
 

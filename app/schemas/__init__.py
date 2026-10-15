@@ -13,6 +13,7 @@ from .weather import WeatherCreate, WeatherConditionResponse, WeatherComprehensi
 from .responder import ResponderCreate, ResponderForApproval, ResponderOTPDispatchResponse, ResponderOTPVerifyRequest, ResponderOTPVerifyResponse, ResponderDetails, NotifPreferenceUpdateRequest, AlertListItem, AlertPaginatedResponse
 from .responder import ResponderListItem, ResponderDetailsResponse, ResponderSendSMSRequest, ResponderOTPVerificationCreate, ResponderRegistrationRequest
 from .responder import AcknowledgeNotifRequest, AcknowledgeNotifResponse
+from .responder import ClaimRequest, ClaimResponse
 from .responder import ResponderAdminUpdate, ResponderSelfUpdate
 
 from .reading_summary_response import SensorWebSocketResponse, SensorReadingSummary, WaterLevelSummary, AlertSummary
