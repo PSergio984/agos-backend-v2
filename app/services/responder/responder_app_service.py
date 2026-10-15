@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-from app.api.v1.dependencies import CurrentUser
+from app.api.v1.dependencies import CurrentResponder, CurrentUser
 from app.crud import admin_audit_log_crud, location_crud
 from app.crud import notification_delivery_crud
 from app.crud import notification_dispatch_crud
@@ -131,7 +131,7 @@ class ResponderAppService:
                     type=delivery.dispatch.type,
                     title=delivery.dispatch.title,
                     message=delivery.dispatch.message,
-                    timestamp=delivery.sent_at,
+                    timestamp=delivery.sent_at or delivery.created_at,
                     is_acknowledged=delivery.acknowledgement is not None,
                     acknowledged_at=delivery.acknowledgement.acknowledged_at if delivery.acknowledgement else None,
                     acknowledge_message=delivery.acknowledgement.message if delivery.acknowledgement else None,
@@ -179,7 +179,7 @@ class ResponderAppService:
     async def claim_alert(
         self,
         dispatch_id: int,
-        current_responder: Responder,
+        current_responder: CurrentResponder,
         db: AsyncSession,
     ) -> ClaimResponse:
         """"On it" claim — marks the shared dispatch as taken by this responder

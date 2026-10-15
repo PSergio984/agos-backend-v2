@@ -26,6 +26,17 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
         return result.scalars().first()
 
 
+    async def get_active_ids(self, db: AsyncSession, ids: list[int]) -> set[int]:
+        """Subset of `ids` that exist AND are active — lets bulk callers
+        validate client-supplied site ids in one query."""
+        result = await db.execute(
+            select(self.model.id).where(
+                self.model.id.in_(ids), self.model.is_active.is_(True)
+            )
+        )
+        return set(result.scalars().all())
+
+
     async def get_all_ids(self, db: AsyncSession) -> list[int]:
         # Active sites only — callers fan out alerts / rebuild caches, and a
         # deactivated site participates in neither.

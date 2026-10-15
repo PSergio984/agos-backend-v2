@@ -49,6 +49,8 @@ async def subscribe_citizen(
     location = await location_crud.get(db=db, id=data.location_id)
     if location is None:
         raise HTTPException(status_code=404, detail="Location not found")
+    if not location.is_active:
+        raise HTTPException(status_code=400, detail="Site is not active")
     await citizen_subscription_crud.upsert(db=db, data=data)
 
 

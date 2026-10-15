@@ -3,6 +3,7 @@ from app.schemas import ResponderCreate, ResponderListItem, ResponderDetailsResp
 from fastapi import HTTPException
 from uuid import UUID
 from app.crud.responder import responder_crud
+from app.crud.location import location_crud
 from app.models.responder_related.push_subscription import PushSubscription
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,17 @@ class ResponderService:
             raise HTTPException(
                 status_code=409,
                 detail=f"Phone numbers already registered: {', '.join(sorted(existing))}",
+            )
+
+        # Home site is client-supplied now — a bad id must surface as a 400,
+        # not a FK-violation 500, and inactive sites aren't valid homes.
+        location_ids = {r.location_id for r in responders}
+        active_ids = await location_crud.get_active_ids(db=db, ids=list(location_ids))
+        invalid_ids = location_ids - active_ids
+        if invalid_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown or inactive location_ids: {sorted(invalid_ids)}",
             )
 
         created_responders = await responder_crud.bulk_create_and_return(db=db, objs_in=responders, created_by_id=user_id)

@@ -73,7 +73,12 @@ class CRUDNotificationDelivery(CRUDBase):
                 | NotificationDispatch.location_id.is_(None)
             )
 
-        stmt = stmt.order_by(NotificationDelivery.sent_at.desc())
+        # FAILED deliveries have sent_at=None; coalesce to created_at so they
+        # don't sort first (Postgres NULLS FIRST) or crash the response schema.
+        stmt = stmt.order_by(
+            func.coalesce(NotificationDelivery.sent_at, NotificationDelivery.created_at).desc(),
+            NotificationDelivery.created_at.desc(),
+        )
 
         offset = (page - 1) * page_size
         stmt = stmt.offset(offset).limit(page_size + 1)

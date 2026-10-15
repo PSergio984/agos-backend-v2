@@ -12,14 +12,6 @@ from app.models.responder_related.responders import responder_groups
 
 class CRUDResponderGroup(CRUDBase[Group, None, None]):
     
-    async def get_by_name(self, db: AsyncSession, name: str) -> Group | None:
-
-        result = await db.execute(
-            select(self.model).where(self.model.name == name)
-        )
-        return result.scalars().first()
-
-
     async def get_by_name_and_location(self, db: AsyncSession, name: str, location_id: int | None) -> Group | None:
 
         """Find a group by name within one site. location_id=None matches the
@@ -97,14 +89,6 @@ class CRUDResponderGroup(CRUDBase[Group, None, None]):
         group.name = name
         db.add(group)
         return group, added_count, removed_count
-
-
-    async def name_exists(self, db: AsyncSession, name: str) -> bool:
-
-        result = await db.execute(
-            select(self.model).where(self.model.name == name)
-        )
-        return result.scalars().first() is not None
 
 
     async def ensure_exists(self, db: AsyncSession, name: str, location_id: int | None = None) -> Group:

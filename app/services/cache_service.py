@@ -60,6 +60,11 @@ class CacheService:
         self._device_ids_cache = None
 
 
+    def invalidate_alert_thresholds(self) -> None:
+        """Settings writes re-read thresholds on the next access."""
+        self._alert_thresholds_cache = None
+
+
     def invalidate_location_caches(self) -> None:
         """Site create/update/deactivate at runtime must drop the caches:
         device map (the new site needs a row), coordinate list (weather

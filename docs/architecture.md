@@ -115,8 +115,8 @@ A **location** is a monitored site. Everything operational is scoped to one:
 ### Push Notification Flow
 
 1. Admin triggers notification → `POST /push/send-notification`
-2. `NotificationService` creates `NotificationDispatch` record (site-scoped when triggered from detection)
-3. Looks up active responders on that site with push subscriptions
+2. `NotificationService` creates `NotificationDispatch` record (site-scoped when triggered from detection; admin-sent pushes are NULL-site announcements)
+3. Looks up active responders in scope (effective site match, or everyone for NULL-site) with push subscriptions
 4. Sends Web Push to each subscription via `pywebpush`
 5. Creates `NotificationDelivery` records (PENDING → SENT/FAILED)
 6. Responder's service worker receives push → native notification
@@ -193,7 +193,7 @@ app/
 │   ├── database.py         # Async engine + session factory
 │   ├── security.py         # JWT + Argon2
 │   └── exceptions.py       # Custom SMS exceptions
-├── crud/                   # 22 CRUD classes + CRUDBase
+├── crud/                   # 24 CRUD classes + CRUDBase
 ├── models/
 │   ├── data_sources/       # Location, SensorDevice, SensorReading, Weather, etc.
 │   └── responder_related/  # Responder, Group, NotificationDelivery, etc.

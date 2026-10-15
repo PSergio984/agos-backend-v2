@@ -175,7 +175,10 @@ async def get_water_level_trend(
     from app.services.cache_service import cache_service
     from app.crud.sensor_reading import sensor_reading_crud
 
-    device_ids = await cache_service.get_device_ids_per_location(db, location_id)
+    try:
+        device_ids = await cache_service.get_device_ids_per_location(db, location_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Site not found.")
     if not device_ids or not device_ids.sensor_device_id:
         return []
 

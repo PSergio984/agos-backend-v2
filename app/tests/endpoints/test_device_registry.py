@@ -638,6 +638,10 @@ def test_ws_token_derives_channel_from_active_site(anon_client):
             new=AsyncMock(),
         ) as send_init,
         patch("app.crud.responder_crud.get", new=AsyncMock(return_value=responder)),
+        patch(
+            "app.crud.location_crud.get",
+            new=AsyncMock(return_value=MagicMock(id=3, is_active=True)),
+        ),
     ):
         with anon_client.websocket_connect(
             f"/ws?location_id=99&token={_responder_jwt(uuid.uuid4())}"
@@ -657,13 +661,42 @@ def test_ws_invalid_token_closes_1008(anon_client):
 
 
 def test_ws_no_token_keeps_client_chosen_channel(anon_client):
+    session = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
     with (
+        patch("app.api.v1.endpoints.websocket.AsyncSessionLocal", new=MagicMock(return_value=cm)),
         patch(
             "app.api.v1.endpoints.websocket.websocket_service.send_initial_data",
             new=AsyncMock(),
         ) as send_init,
+        patch(
+            "app.crud.location_crud.get",
+            new=AsyncMock(return_value=MagicMock(id=7, is_active=True)),
+        ),
     ):
         with anon_client.websocket_connect("/ws?location_id=7"):
             pass
 
     assert send_init.await_args.kwargs["location_id"] == 7
+
+
+def test_ws_inactive_site_closes_1008(anon_client):
+    session = MagicMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("app.api.v1.endpoints.websocket.AsyncSessionLocal", new=MagicMock(return_value=cm)),
+        patch(
+            "app.crud.location_crud.get",
+            new=AsyncMock(return_value=MagicMock(id=7, is_active=False)),
+        ),
+    ):
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with anon_client.websocket_connect("/ws?location_id=7") as ws:
+                ws.receive_json()
+    assert exc.value.code == 1008

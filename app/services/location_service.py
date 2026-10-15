@@ -101,6 +101,15 @@ class LocationService:
                 detail="A site with that name already exists.",
             )
         cache_service.invalidate_location_caches()
+        if updated.is_active:
+            # Reactivating a site that was inactive at startup (or never had
+            # state created) — without this its /ws initial data and risk
+            # reads raise ValueError. No-op when the state already exists.
+            fusion_state_manager.start_fusion_analysis_state(
+                location_id=updated.id,
+                sensor_device_id=None,
+                camera_device_id=None,
+            )
         return LocationResponse.model_validate(updated)
 
 

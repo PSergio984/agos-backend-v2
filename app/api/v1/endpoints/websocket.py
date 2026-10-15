@@ -76,6 +76,17 @@ async def websocket_endpoint(websocket: WebSocket):
         )
         return
 
+    # Reject unknown/inactive sites up front — send_initial_data would
+    # otherwise die silently inside the generic except after accept.
+    from app.crud import location_crud
+    async with AsyncSessionLocal() as db:
+        site = await location_crud.get(db=db, id=location_id)
+    if site is None or not site.is_active:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Site is not active"
+        )
+        return
+
     # Add the WebSocket connection to the manager
     await ws_manager.connect(websocket=websocket, location_id=location_id)
 

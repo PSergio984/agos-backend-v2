@@ -120,6 +120,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # CAVEAT: these UNIQUE recreations fail if duplicate rows exist post-
+    # upgrade — same-named groups across sites (uq_groups_name_location),
+    # or multiple devices on one location. Clean up before downgrading.
     op.drop_column("locations", "is_active")
     op.create_unique_constraint("groups_name_key", "groups", ["name"])
     op.create_unique_constraint(

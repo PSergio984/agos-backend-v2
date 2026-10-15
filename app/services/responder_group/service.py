@@ -57,7 +57,11 @@ class ResponderGroupService:
         dedup_member_ids = list(dict.fromkeys(group.member_ids))
 
         try:
-            if await responder_group_crud.name_exists(db=db, name=normalized_name):
+            # Names are unique per site — admin-created groups are NULL-site,
+            # so the collision check runs within that same scope.
+            if await responder_group_crud.get_by_name_and_location(
+                db=db, name=normalized_name, location_id=None
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="A group with this name already exists.",
@@ -141,8 +145,9 @@ class ResponderGroupService:
                     detail="This group name is reserved for the system default active-responders group.",
                 )
 
-            existing_name_match = await responder_group_crud.get_by_name(
-                db=db, name=normalized_name
+            # Uniqueness is per site — the check runs in the group's own scope.
+            existing_name_match = await responder_group_crud.get_by_name_and_location(
+                db=db, name=normalized_name, location_id=existing_group.location_id
             )
             if existing_name_match and existing_name_match.id != group_id:
                 raise HTTPException(
