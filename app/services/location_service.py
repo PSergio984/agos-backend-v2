@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
+from app.core.state import fusion_state_manager
 from app.crud import admin_audit_log_crud, location_crud
 from app.schemas import (
     AdminAuditLogCreate,
@@ -47,6 +48,13 @@ class LocationService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid site data.",
             )
+        # A site created at runtime still needs fusion state, otherwise its
+        # readings cannot score until the next restart.
+        fusion_state_manager.start_fusion_analysis_state(
+            location_id=created.id,
+            sensor_device_id=None,
+            camera_device_id=None,
+        )
         return LocationResponse.model_validate(created)
 
     async def update_site(

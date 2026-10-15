@@ -102,7 +102,9 @@ class SensorReadingService:
                 status="Error: Sensor device not found",
             )
 
-        sensor_config = await cache_service.get_sensor_config(db=db)
+        sensor_config = await cache_service.get_sensor_config(
+            db=db, sensor_device_id=obj_in.sensor_device_id
+        )
         computed_water_level_cm = (
             sensor_config.installation_height - obj_in.raw_distance_cm
         )
@@ -158,13 +160,17 @@ class SensorReadingService:
         self, db: AsyncSession, reading: SensorReading
     ) -> SensorReadingSummary:
         prev_reading = await sensor_reading_crud.get_previous_reading(
-            db=db, before_timestamp=reading.timestamp
+            db=db,
+            before_timestamp=reading.timestamp,
+            sensor_device_id=reading.sensor_device_id,
         )
         water_level_summary = self._calculate_water_level_summary(
             current_cm=reading.water_level_cm, prev_reading=prev_reading
         )
         alert_summary = await self._calculate_alert_summary(
-            current_cm=reading.water_level_cm, db=db
+            current_cm=reading.water_level_cm,
+            db=db,
+            sensor_device_id=reading.sensor_device_id,
         )
         return SensorReadingSummary(
             timestamp=reading.timestamp,
@@ -192,9 +198,11 @@ class SensorReadingService:
         )
 
     async def _calculate_alert_summary(
-        self, current_cm: float, db: AsyncSession
+        self, current_cm: float, db: AsyncSession, sensor_device_id: int
     ) -> AlertSummary:
-        sensor_config = await cache_service.get_sensor_config(db=db)
+        sensor_config = await cache_service.get_sensor_config(
+            db=db, sensor_device_id=sensor_device_id
+        )
         current_cm = float(current_cm)
         warn = float(sensor_config.warning_threshold)
         crit = float(sensor_config.critical_threshold)

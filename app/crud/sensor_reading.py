@@ -23,11 +23,12 @@ class CRUDSensorReading(CRUDBase[SensorReading, SensorReadingCreate, None]):
         return result.scalars().first()
 
 
-    # For getting the previous reading before a specific timestamp
-    async def get_previous_reading(self, db: AsyncSession, before_timestamp: datetime) -> SensorReading | None:
+    # For getting the previous reading for a specific sensor before a timestamp
+    async def get_previous_reading(self, db: AsyncSession, before_timestamp: datetime, sensor_device_id: int) -> SensorReading | None:
 
         result = await db.execute(
             select(self.model)
+            .filter(self.model.sensor_device_id == sensor_device_id)
             .filter(self.model.timestamp < before_timestamp)
             .order_by(self.model.timestamp.desc())
             .limit(1)
