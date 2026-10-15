@@ -128,7 +128,7 @@ Auth legend: `JWT` = admin token required, `SU` = superuser admin token required
 | GET | `/additional-details/{responder_id}` | JWT | Detailed responder info (groups, push status, delivery stats). |
 | GET | `/template` | JWT | Download Excel template for responder bulk import. Columns: First Name, Last Name, Phone Number, Location ID (numeric site id from `GET /locations`). |
 | POST | `/bulk` | JWT | Bulk create responders. Each item requires `location_id` (home site). |
-| PATCH | `/{responder_id}` | JWT | Update responder `first_name`, `last_name`, `phone_number`. Home site changes go through deployments/`location_id` on create. |
+| PATCH | `/{responder_id}` | JWT | Update `first_name`, `last_name`, `phone_number`, `location_id` (home-site reassign — site must exist and be active, else 404; clears `active_location_id`). |
 | GET | `/{responder_id}/deployments` | JWT | The responder's sites: home site + every deployment record. |
 | POST | `/{responder_id}/deployments` | JWT | Open a deployment to another site. Body: `location_id`, optional `starts_at`, `planned_ends_at`. Supersedes any open deployment; 409 if targeting the home site or an already-open site. |
 | POST | `/{responder_id}/deployments/{deployment_id}/close` | JWT | Close an open deployment (sets `ends_at`). 409 if already closed. |

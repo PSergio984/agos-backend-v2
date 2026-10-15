@@ -36,10 +36,10 @@ def _build_group_update_audit_action(
 
 class ResponderGroupService:
     async def get_all_groups(self, db: AsyncSession) -> list[ResponderGroupItem]:
-        await responder_group_crud.ensure_exists(
-            db=db,
-            name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
-        )
+        # No NULL-site ensure_exists here — the multi-site migration backfills
+        # the legacy "All Active Responders" group onto site 1, and per-site
+        # groups are created on responder activation / site creation. A fresh
+        # NULL-site group would never gain members and can't be deleted.
         groups = await responder_group_crud.get_all_with_member_ids(db=db)
         return [
             ResponderGroupItem(

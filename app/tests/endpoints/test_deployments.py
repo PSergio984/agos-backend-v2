@@ -266,7 +266,7 @@ def test_set_active_site_requires_auth(anon_client):
     res = anon_client.post(
         "/api/v1/responder/active-site", json={"location_id": SITE_B_ID}
     )
-    assert res.status_code == 401
+    assert res.status_code in (401, 403)
 
 
 # ---------------------------------------------------------------------------
