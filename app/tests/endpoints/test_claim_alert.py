@@ -152,7 +152,6 @@ def _patches(dispatch=None, has_ack=False, responder=None, has_delivery=True):
     )
 
 
-
 async def test_service_claim_sets_fields_and_broadcasts():
     dispatch = _dispatch()
     db = AsyncMock()
@@ -176,7 +175,6 @@ async def test_service_claim_sets_fields_and_broadcasts():
     assert result.claimed_by_name == "Danny Cleaner"
 
 
-
 async def test_service_claim_already_claimed_409():
     dispatch = _dispatch(claimed_by=uuid.uuid4())
     crud_d, crud_del, crud_r, ws = _patches(dispatch=dispatch)
@@ -188,7 +186,6 @@ async def test_service_claim_already_claimed_409():
                 db=AsyncMock(),
             )
     assert exc.value.status_code == 409
-
 
 
 async def test_service_claim_acknowledged_409():
@@ -203,7 +200,6 @@ async def test_service_claim_acknowledged_409():
     assert exc.value.status_code == 409
 
 
-
 async def test_service_claim_wrong_type_403():
     crud_d, crud_del, crud_r, ws = _patches(
         dispatch=_dispatch(type=NotificationType.CRITICAL)
@@ -216,7 +212,6 @@ async def test_service_claim_wrong_type_403():
                 db=AsyncMock(),
             )
     assert exc.value.status_code == 403
-
 
 
 async def test_service_claim_missing_404():

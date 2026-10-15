@@ -1,0 +1,71 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+      - 'feat/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ENV_STATE: test
+      # Settings() requires every key present; tests never touch real services.
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+      SECRET_KEY: test-secret-key
+      ALGORITHM: HS256
+      IOT_API_KEY: test-iot-key
+      FRONTEND_URLS: http://localhost:3000
+      STREAM_URL: http://localhost:8000
+      CLOUDINARY_UPLOAD_ENABLED: "false"
+      CLOUDINARY_CLOUD_NAME: test
+      CLOUDINARY_API_KEY: test
+      CLOUDINARY_API_SECRET: test
+      GROQ_API_KEYS: test
+      GROQ_MODELS: test
+      VAPID_PRIVATE_KEY: test
+      VAPID_PUBLIC_KEY: test
+      VAPID_CLAIM_EMAIL: mailto:test@example.com
+      SMS_GATEWAY_URL: http://localhost:9999
+      SMS_GATEWAY_API_KEY: test
+      EXPOSE_DEV_OTP: "false"
+      WEATHER_PROVIDER: openweathermap
+      OPENWEATHERMAP_API_KEY: test
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Ruff
+        # 205 pre-existing violations across the codebase — informational until
+        # a cleanup pass lands; flip to a hard gate when it does.
+        continue-on-error: true
+        run: ruff check . --output-format github
+
+      - name: Pytest
+        run: pytest -q

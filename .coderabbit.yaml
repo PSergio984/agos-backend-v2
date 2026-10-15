@@ -1,0 +1,35 @@
+language: en
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: [ "main" ]
+  path_instructions:
+    - path: "app/api/v1/endpoints/**"
+      instructions: |
+        Thin HTTP layer only: auth dependency, call service, return schema.
+        Flag business logic, raw SQL, and direct session use inside endpoints.
+        Responder-facing routes require `require_responder_auth`; admin routes
+        `require_auth` — flag any endpoint missing its auth dependency.
+    - path: "app/services/**"
+      instructions: |
+        Business logic lives here. Flag writes without commit, broadcast
+        before persistence, and checks done without a row lock where races
+        exist (see claim_alert's get_with_lock pattern).
+    - path: "app/crud/**"
+      instructions: |
+        Query/shape helpers only. Flag business rules and HTTPException in
+        CRUD — those belong in services.
+    - path: "alembic/versions/**"
+      instructions: |
+        Flag revision-id collisions with existing files, missing down_revision
+        chains, and non-nullable columns added without server_default on
+        populated tables.
+    - path: "app/tests/**"
+      instructions: |
+        Tests use `asyncio_mode = auto` (no markers needed). Endpoint tests
+        must use `TestClient(app)` without a context manager so the app
+        lifespan — and its Postgres connection — does not run. Flag real
+        DB/network access; dependencies must be overridden.

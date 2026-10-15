@@ -1,0 +1,26 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash -c 'command -v graphify >/dev/null 2>&1 && (graphify update . >/dev/null 2>&1 &)' || true",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "^(exec|bash)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash .devin/graphify-update.sh",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

@@ -71,3 +71,4 @@ dummy_images/
 # Keep the directories
 !app/storage/hls_output/.gitkeep
 !app/storage/captured_frames/.gitkeep
+graphify-out/
