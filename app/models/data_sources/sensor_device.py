@@ -38,9 +38,9 @@ class SensorDevice(Base):
     __tablename__ = "sensor_devices"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False, unique=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
     device_name = Column(String(100), nullable=False)
     sensor_config = Column(SensorConfigType, nullable=False)
 
-    location = relationship("Location", back_populates="sensor_device")
+    location = relationship("Location", back_populates="sensor_devices")
     sensor_readings = relationship("SensorReading", back_populates="sensor_device", cascade="all, delete-orphan")

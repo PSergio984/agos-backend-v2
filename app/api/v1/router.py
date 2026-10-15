@@ -14,6 +14,7 @@ from app.api.v1.endpoints import model_reading_logs
 from app.api.v1.endpoints import health
 from app.api.v1.endpoints import iot
 from app.api.v1.endpoints import evacuation_center, evacuation
+from app.api.v1.endpoints import locations
 from app.api.v1.endpoints import public
 from fastapi import APIRouter
 
@@ -41,4 +42,5 @@ api_router.include_router(health.router)
 api_router.include_router(iot.router)
 api_router.include_router(evacuation_center.router)
 api_router.include_router(evacuation.router)
+api_router.include_router(locations.router)
 api_router.include_router(public.router)

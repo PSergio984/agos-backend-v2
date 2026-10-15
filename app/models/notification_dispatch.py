@@ -16,6 +16,10 @@ class NotificationDispatch(Base):
     message = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.timezone("UTC", func.now()), nullable=False)
 
+    # Site this dispatch belongs to. NULL = global announcement, delivered to
+    # every active responder regardless of site.
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
+
     # "On it" claim — the responder who said they're handling this alert.
     # Claim is deliberately not completion: acknowledge stays the closing log.
     claimed_by = Column(
@@ -27,3 +31,4 @@ class NotificationDispatch(Base):
 
     deliveries = relationship("NotificationDelivery", back_populates="dispatch", cascade="all, delete-orphan")
     claimed_by_responder = relationship("Responder", foreign_keys=[claimed_by])
+    location = relationship("Location", foreign_keys=[location_id])

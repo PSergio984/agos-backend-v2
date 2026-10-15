@@ -45,7 +45,7 @@ from .evacuation import (
     EvacuationEventResponse,
 )
 
-from .location import LocationCoordinate, DevicePerLocation
+from .location import LocationCoordinate, DevicePerLocation, LocationCreate, LocationUpdate, LocationResponse
 from .core import LocationDetails, DeviceDetails, PublicStatusResponse
 
 from .upload import UploadResponse

@@ -56,7 +56,8 @@ class ResponderBase(BaseModel):
         return cleaned
 
 class ResponderCreate(ResponderBase):
-    pass
+    # Multi-site: a responder's home site is explicit, never silently site 1.
+    location_id: int
 
 
 def _validate_name(v: str | None) -> str | None:
