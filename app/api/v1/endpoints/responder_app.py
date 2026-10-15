@@ -7,6 +7,7 @@ from app.schemas import ResponderDetails, NotifPreferenceUpdateRequest, AlertPag
 from app.schemas import ResponderForApproval, ResponderOTPDispatchResponse, ResponderOTPVerifyRequest, ResponderOTPVerifyResponse, ResponderSendSMSRequest, ResponderRegistrationRequest
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse
 from app.schemas import ClaimRequest, ClaimResponse
+from app.schemas import ResponderActiveSiteResponse, ResponderActiveSiteUpdate
 from app.models.responder_related.responders import NotificationPreference
 from app.models.notification_template import NotificationType
 from app.services import responder_app_service
@@ -115,6 +116,20 @@ async def update_responder_notif_preferences(
     _validate_responder_id(current_responder, responder_id)
     await responder_app_service.update_responder_notif_preferences(
         responder_id=responder_id, key=request.key, value=request.value, db=db
+    )
+
+
+@router.post("/active-site", response_model=ResponderActiveSiteResponse)
+async def set_active_site(
+    payload: ResponderActiveSiteUpdate,
+    current_responder: CurrentResponder = Depends(require_responder_auth),
+    db: AsyncSession = Depends(get_db)) -> ResponderActiveSiteResponse:
+
+    # Identity comes from the token — a responder can only set their own site.
+    return await responder_app_service.set_active_site(
+        responder_id=current_responder.id,
+        location_id=payload.location_id,
+        db=db,
     )
 
 

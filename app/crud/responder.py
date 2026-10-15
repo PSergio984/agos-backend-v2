@@ -57,7 +57,10 @@ class CRUDResponder(CRUDBase[None, None, None]):
 
         result = await db.execute(
             select(self.model)
-            .options(joinedload(self.model.location)) # eager load
+            .options(
+                joinedload(self.model.location),
+                joinedload(self.model.active_location),
+            ) # eager load home + active site names
             .filter(self.model.id == responder_id)
             .execution_options(populate_existing=False)
         )

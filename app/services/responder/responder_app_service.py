@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from app.crud import notification_delivery_crud
 from app.crud import notification_dispatch_crud
+from app.crud import responder_deployment_crud
 from app.crud import responder_otp_verification_crud
 from app.crud.responder_group import responder_group_crud
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,7 @@ from app.schemas import ResponderOTPVerifyResponse, AlertListItem, AlertPaginate
 from app.models.notification_template import NotificationType
 from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, ClaimResponse
+from app.schemas import ResponderActiveSiteResponse
 from app.models.responder_related.responders import ResponderStatus
 from app.services.websocket_service import websocket_service
 
@@ -61,6 +63,8 @@ class ResponderAppService:
             phone_number=responder.phone_number,
             location_id=responder.location_id,
             location_name=responder.location.name,
+            active_location_id=responder.active_location_id,
+            active_location_name=responder.active_location.name if responder.active_location else None,
             created_at=responder.created_at,
             activated_at=responder.activated_at
         )
@@ -211,6 +215,38 @@ class ResponderAppService:
             claimed_by=responder.id,
             claimed_by_name=claimer_name,
             claimed_at=dispatch.claimed_at,
+        )
+
+
+    async def set_active_site(
+        self, responder_id: UUID, location_id: int, db: AsyncSession
+    ) -> ResponderActiveSiteResponse:
+        """Presence: the responder marks which site they're on. Valid choices
+        are their home site or the site of their open deployment — anything
+        else means they're not a member there."""
+        # Lock the responder row so a concurrent deployment close can't race
+        # this write (the close path clears active_location_id under the lock).
+        responder: Responder = await responder_crud.get_with_lock(db=db, id=responder_id)
+        if not responder:
+            raise HTTPException(status_code=404, detail="Responder not found.")
+
+        if location_id != responder.location_id:
+            open_deployment = await responder_deployment_crud.get_open_for_responder(
+                db=db, responder_id=responder.id
+            )
+            if open_deployment is None or open_deployment.location_id != location_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Responder is not deployed to that site.",
+                )
+
+        responder.active_location_id = location_id
+        db.add(responder)
+        await db.commit()
+
+        return ResponderActiveSiteResponse(
+            location_id=responder.location_id,
+            active_location_id=responder.active_location_id,
         )
 
 
