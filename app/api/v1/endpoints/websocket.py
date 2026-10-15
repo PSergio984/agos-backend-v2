@@ -6,6 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from app.core.ws_manager import ws_manager
 from app.services.websocket_service import websocket_service
 from app.services.ml_service import ml_service
+from app.services.camera_device_service import camera_device_service
 from app.services.camera_status_service import camera_status_service
 from app.core.database import AsyncSessionLocal
 
@@ -81,6 +82,19 @@ async def rpi_websocket_endpoint(websocket: WebSocket):
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Invalid camera_device_id or location_id",
+        )
+        return
+
+    # Camera↔site binding: the device's registered site must match the
+    # claimed location_id (unknown/inactive device → same rejection).
+    async with AsyncSessionLocal() as db:
+        bound_device = await camera_device_service.get_for_ingest(
+            db=db, camera_device_id=camera_device_id, location_id=location_id
+        )
+    if bound_device is None:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Camera device is not registered for this location",
         )
         return
 

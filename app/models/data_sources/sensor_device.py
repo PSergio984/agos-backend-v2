@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, String, Integer, JSON
+from sqlalchemy import Boolean, Column, ForeignKey, String, Integer, JSON, text
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import relationship
 from ..base import Base
@@ -41,6 +41,7 @@ class SensorDevice(Base):
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
     device_name = Column(String(100), nullable=False)
     sensor_config = Column(SensorConfigType, nullable=False)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
 
     location = relationship("Location", back_populates="sensor_devices")
     sensor_readings = relationship("SensorReading", back_populates="sensor_device", cascade="all, delete-orphan")
