@@ -4,7 +4,9 @@ Same seam as the claim tests: endpoint contract via TestClient (no context
 manager) with get_db + require_auth overridden, and service mocked/patched.
 """
 
-from unittest.mock import AsyncMock, patch
+import uuid
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -139,3 +141,68 @@ def test_update_site_name_race_returns_409(admin_client):
         res = admin_client.put("/api/v1/locations/1", json={"name": "Taken"})
 
     assert res.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Service-level: deactivation cleanup
+# ---------------------------------------------------------------------------
+
+
+def _site_row(is_active=True):
+    row = MagicMock(id=1, latitude=14.6, longitude=121.0, is_active=is_active)
+    row.name = "Site A"  # MagicMock `name` kwarg sets the repr name, not the attr
+    return row
+
+
+def _update_site_patches(updated, existing):
+    from app.services.location_service import (
+        admin_audit_log_crud,
+        cache_service,
+        fusion_state_manager,
+        location_crud,
+        responder_crud,
+        responder_deployment_crud,
+    )
+    return (
+        patch.object(location_crud, "get", new=AsyncMock(return_value=existing)),
+        patch.object(location_crud, "get_by_name", new=AsyncMock(return_value=None)),
+        patch.object(location_crud, "update_no_commit", new=AsyncMock(return_value=updated)),
+        patch.object(responder_crud, "clear_active_site", new=AsyncMock()),
+        patch.object(responder_deployment_crud, "close_open_for_location", new=AsyncMock()),
+        patch.object(admin_audit_log_crud, "create_only_no_commit", new=AsyncMock()),
+        patch.object(cache_service, "invalidate_location_caches"),
+        patch.object(fusion_state_manager, "start_fusion_analysis_state"),
+    )
+
+
+async def test_update_site_deactivation_clears_presence_and_deployments():
+    from app.schemas import LocationUpdate
+
+    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p = _update_site_patches(
+        updated=_site_row(is_active=False), existing=_site_row()
+    )
+    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p:
+        result = await location_service.update_site(
+            db=AsyncMock(), location_id=1, payload=LocationUpdate(is_active=False),
+            current_user=MagicMock(id=uuid.uuid4()),
+        )
+
+    clear.assert_awaited_once()
+    close.assert_awaited_once()
+    assert result.is_active is False
+
+
+async def test_update_site_other_changes_skip_cleanup():
+    from app.schemas import LocationUpdate
+
+    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p = _update_site_patches(
+        updated=_site_row(is_active=True), existing=_site_row()
+    )
+    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p:
+        await location_service.update_site(
+            db=AsyncMock(), location_id=1, payload=LocationUpdate(name="Renamed"),
+            current_user=MagicMock(id=uuid.uuid4()),
+        )
+
+    clear.assert_not_awaited()
+    close.assert_not_awaited()

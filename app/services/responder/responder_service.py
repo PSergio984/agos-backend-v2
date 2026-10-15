@@ -96,12 +96,19 @@ class ResponderService:
     ) -> ResponderListItem:
         # Phone change does not invalidate the responder JWT or push subscriptions:
         # both key off responder_id, not phone_number.
+        if payload.location_id is not None:
+            site = await location_crud.get(db=db, id=payload.location_id)
+            if site is None or not site.is_active:
+                raise HTTPException(
+                    status_code=404, detail="Site not found or inactive."
+                )
         updated = await responder_crud.update_details(
             db=db,
             responder_id=responder_id,
             first_name=payload.first_name,
             last_name=payload.last_name,
             phone_number=payload.phone_number,
+            location_id=payload.location_id,
         )
         has_push = await db.execute(
             select(PushSubscription.id).where(PushSubscription.responder_id == updated.id).limit(1)

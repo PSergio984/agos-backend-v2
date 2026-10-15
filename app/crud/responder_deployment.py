@@ -85,6 +85,20 @@ class CRUDResponderDeployment(CRUDBase[ResponderDeployment, None, None]):
 
         deployment.ends_at = datetime.now(timezone.utc)
         db.add(deployment)
+
+
+    async def close_open_for_location(self, db: AsyncSession, location_id: int) -> None:
+        """Site deactivation cleanup — every open posting to the dead site
+        closes (flush-only; the caller owns the commit)."""
+        from sqlalchemy import update
+        await db.execute(
+            update(self.model)
+            .where(
+                self.model.location_id == location_id,
+                self.model.ends_at.is_(None),
+            )
+            .values(ends_at=datetime.now(timezone.utc))
+        )
         # committed at the service layer
 
 

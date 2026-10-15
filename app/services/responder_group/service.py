@@ -45,6 +45,7 @@ class ResponderGroupService:
             ResponderGroupItem(
                 id=group.id,
                 group_name=group.name,
+                location_id=group.location_id,
                 member_ids=[responder.id for responder in group.responders],
             )
             for group in groups
@@ -107,6 +108,7 @@ class ResponderGroupService:
         return ResponderGroupItem(
             id=created.id,
             group_name=created.name,
+            location_id=created.location_id,
             member_ids=dedup_member_ids,
         )
 
@@ -207,6 +209,7 @@ class ResponderGroupService:
         return ResponderGroupItem(
             id=updated_group.id,
             group_name=updated_group.name,
+            location_id=updated_group.location_id,
             member_ids=dedup_member_ids,
         )
 

@@ -331,15 +331,19 @@ def _verify_patches(responder):
                 "add_member": AsyncMock(),
             },
         ),
+        patch(
+            f"{APP_MODULE}.location_crud",
+            **{"get": AsyncMock(return_value=MagicMock(is_active=True))},
+        ),
     )
 
 
 async def test_pending_responder_activation_joins_home_site_group():
     responder_id = uuid.uuid4()
     responder = MagicMock(status=ResponderStatus.PENDING, location_id=SITE_B)
-    otp_crud, otp_hash, token, r_crud, g_crud = _verify_patches(responder)
+    otp_crud, otp_hash, token, r_crud, g_crud, _loc_crud = _verify_patches(responder)
 
-    with otp_crud, otp_hash, token, r_crud as r_mock, g_crud as g_mock:
+    with otp_crud, otp_hash, token, r_crud as r_mock, g_crud as g_mock, _loc_crud:
         result = await responder_app_service.verify_otp(
             verify_request=ResponderOTPVerifyRequest(
                 responder_id=responder_id, otp="123456"
@@ -362,9 +366,9 @@ async def test_pending_responder_activation_joins_home_site_group():
 
 async def test_active_responder_relogin_skips_group_join():
     responder = MagicMock(status=ResponderStatus.ACTIVE, location_id=SITE_B)
-    otp_crud, otp_hash, token, r_crud, g_crud = _verify_patches(responder)
+    otp_crud, otp_hash, token, r_crud, g_crud, _loc_crud = _verify_patches(responder)
 
-    with otp_crud, otp_hash, token, r_crud as r_mock, g_crud as g_mock:
+    with otp_crud, otp_hash, token, r_crud as r_mock, g_crud as g_mock, _loc_crud:
         result = await responder_app_service.verify_otp(
             verify_request=ResponderOTPVerifyRequest(
                 responder_id=uuid.uuid4(), otp="123456"
@@ -512,3 +516,71 @@ async def test_delivery_log_items_carry_dispatch_location():
         )
 
     assert res.items[0].location_id == SITE_A
+
+
+async def test_verify_otp_rejects_activation_into_inactive_home_site():
+    """OTP for a PENDING responder whose home site was deactivated → 409, no
+    group join, no activation."""
+    import pytest
+    from fastapi import HTTPException
+
+    responder = MagicMock(status=ResponderStatus.PENDING, location_id=SITE_B)
+    otp_crud, otp_hash, token, r_crud, g_crud, loc_crud = _verify_patches(responder)
+
+    with otp_crud, otp_hash, token, r_crud as r_mock, g_crud as g_mock, loc_crud as loc_mock:
+        loc_mock.get.return_value = MagicMock(is_active=False)
+        with pytest.raises(HTTPException) as exc:
+            await responder_app_service.verify_otp(
+                verify_request=ResponderOTPVerifyRequest(
+                    responder_id=uuid.uuid4(), otp="123456"
+                ),
+                db=AsyncMock(),
+            )
+
+    assert exc.value.status_code == 409
+    g_mock.ensure_exists.assert_not_called()
+    r_mock.activate.assert_not_awaited()
+
+
+async def test_responder_details_lists_open_deployments_only():
+    """The presence picker reads `deployments` — open ones only."""
+    responder_id = uuid.uuid4()
+    responder = MagicMock(
+        id=responder_id,
+        first_name="A",
+        last_name="B",
+        status=ResponderStatus.ACTIVE,
+        phone_number="0917",
+        location_id=SITE_A,
+        active_location_id=None,
+        active_location=None,
+        created_at=datetime.now(timezone.utc),
+        activated_at=None,
+    )
+    responder.location.name = "Site A"
+    open_dep = MagicMock(
+        id=7, location_id=SITE_B, starts_at=datetime.now(timezone.utc),
+        ends_at=None, planned_ends_at=None, created_by=uuid.uuid4(),
+    )
+    open_dep.location.name = "Site B"
+    closed_dep = MagicMock(
+        id=8, location_id=SITE_B, starts_at=datetime.now(timezone.utc),
+        ends_at=datetime.now(timezone.utc), planned_ends_at=None, created_by=uuid.uuid4(),
+    )
+
+    with (
+        patch(
+            f"{APP_MODULE}.responder_crud",
+            **{"get_responder_details_for_app": AsyncMock(return_value=responder)},
+        ),
+        patch(
+            f"{APP_MODULE}.responder_deployment_crud",
+            **{"list_for_responder": AsyncMock(return_value=[open_dep, closed_dep])},
+        ),
+    ):
+        details = await responder_app_service.get_responder_details_for_app(
+            responder_id=responder_id, db=AsyncMock()
+        )
+
+    assert [d.id for d in details.deployments] == [7]
+    assert details.deployments[0].location_name == "Site B"

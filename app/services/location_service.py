@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
 from app.core.state import fusion_state_manager
-from app.crud import admin_audit_log_crud, location_crud
+from app.crud import admin_audit_log_crud, location_crud, responder_crud, responder_deployment_crud
 from app.services.cache_service import cache_service
 from app.schemas import (
     AdminAuditLogCreate,
@@ -83,8 +83,16 @@ class LocationService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A site with that name already exists.",
                 )
+        deactivating = location.is_active and payload.is_active is False
         try:
             updated = await location_crud.update_no_commit(db=db, db_obj=location, obj_in=payload)
+            if deactivating:
+                # Membership must reflect reality: responders present on the
+                # dead site fall back to home, and its open deployments close.
+                await responder_crud.clear_active_site(db=db, location_id=location_id)
+                await responder_deployment_crud.close_open_for_location(
+                    db=db, location_id=location_id
+                )
             await admin_audit_log_crud.create_only_no_commit(
                 db=db,
                 obj_in=AdminAuditLogCreate(

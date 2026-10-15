@@ -25,7 +25,7 @@ from app.schemas import ResponderOTPVerifyResponse, AlertListItem, AlertPaginate
 from app.models.notification_template import NotificationType
 from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, ClaimResponse
-from app.schemas import ResponderActiveSiteResponse, AdminAuditLogCreate
+from app.schemas import ResponderActiveSiteResponse, AdminAuditLogCreate, ResponderDeploymentItem
 from app.models.responder_related.responders import ResponderStatus
 from app.services.websocket_service import websocket_service
 
@@ -57,6 +57,11 @@ class ResponderAppService:
         if not responder:
             raise HTTPException(status_code=404, detail="Responder not found.")
         
+        # The presence picker needs the responder's eligible sites — the open
+        # deployment(s), one at most by the partial index.
+        deployments = await responder_deployment_crud.list_for_responder(
+            db=db, responder_id=responder_id
+        )
         return ResponderDetails(
             id=str(responder.id),
             first_name=responder.first_name,
@@ -67,6 +72,19 @@ class ResponderAppService:
             location_name=responder.location.name,
             active_location_id=responder.active_location_id,
             active_location_name=responder.active_location.name if responder.active_location else None,
+            deployments=[
+                ResponderDeploymentItem(
+                    id=d.id,
+                    location_id=d.location_id,
+                    location_name=d.location.name,
+                    starts_at=d.starts_at,
+                    ends_at=d.ends_at,
+                    planned_ends_at=d.planned_ends_at,
+                    created_by=d.created_by,
+                )
+                for d in deployments
+                if d.ends_at is None
+            ],
             created_at=responder.created_at,
             activated_at=responder.activated_at
         )
@@ -438,6 +456,13 @@ class ResponderAppService:
         # Success - activate and add to group only if still pending (active responders re-logging in skip this)
         responder = await responder_crud.get(db=db, id=verify_request.responder_id)
         if responder.status == ResponderStatus.PENDING:
+            # Activating into a deactivated home site strands the responder.
+            home_site = await location_crud.get(db=db, id=responder.location_id)
+            if home_site is None or not home_site.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Responder's home site is inactive — reassign before activating.",
+                )
             # Join the site's own "All Active Responders" group (home site, not
             # the legacy NULL group). ensure_exists may commit internally, so it
             # runs before the staged writes below.

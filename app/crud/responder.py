@@ -53,6 +53,16 @@ class CRUDResponder(CRUDBase[None, None, None]):
         return list(result.scalars().all())
 
 
+    async def clear_active_site(self, db: AsyncSession, location_id: int) -> None:
+        """Site deactivation cleanup — presence overrides pointing at the dead
+        site clear so affected responders fall back to their home site."""
+        await db.execute(
+            update(self.model)
+            .where(self.model.active_location_id == location_id)
+            .values(active_location_id=None)
+        )
+
+
     async def get_by_phone_number(self, db: AsyncSession, phone_number: str) -> Responder | None:
 
         result = await db.execute(
@@ -156,6 +166,7 @@ class CRUDResponder(CRUDBase[None, None, None]):
         first_name: str | None,
         last_name: str | None,
         phone_number: str | None,
+        location_id: int | None = None,
     ) -> Responder:
         result = await db.execute(
             select(self.model).filter(self.model.id == responder_id)
@@ -170,6 +181,10 @@ class CRUDResponder(CRUDBase[None, None, None]):
             responder.last_name = last_name
         if phone_number is not None:
             responder.phone_number = phone_number
+        if location_id is not None:
+            responder.location_id = location_id
+            # Home move makes any presence override meaningless.
+            responder.active_location_id = None
 
         try:
             await db.commit()

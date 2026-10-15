@@ -84,6 +84,8 @@ class ResponderAdminUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     phone_number: str | None = None
+    # Home-site reassignment — must be an existing site.
+    location_id: int | None = None
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -168,6 +170,8 @@ class ResponderDetails(BaseModel):
     location_name: str
     active_location_id: int | None
     active_location_name: str | None
+    # Sites the responder may mark presence on beyond home — the picker's list.
+    deployments: list[ResponderDeploymentItem]
     created_at: datetime
     activated_at: datetime | None
 
