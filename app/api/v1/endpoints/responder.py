@@ -8,7 +8,7 @@ from uuid import UUID
 from app.api.v1.dependencies import CurrentUser, require_auth
 from app.core.database import get_db
 from app.schemas import ResponderCreate, ResponderDetailsResponse, ResponderListItem, ResponderAdminUpdate
-from app.schemas import ResponderDeploymentCreate, ResponderDeploymentItem
+from app.schemas import ResponderDeploymentCreate, ResponderDeploymentItem, ResponderDeploymentsResponse
 from app.schemas import ResponderActiveSiteResponse, ResponderAdminActiveSiteUpdate
 from app.services import responder_service, responder_deployment_service, responder_app_service
 
@@ -86,11 +86,11 @@ async def update_responder(
 
 # --- Deployments (admin-managed site membership) ---
 
-@router.get("/{responder_id}/deployments", dependencies=[Depends(require_auth)], response_model=list[ResponderDeploymentItem])
+@router.get("/{responder_id}/deployments", dependencies=[Depends(require_auth)], response_model=ResponderDeploymentsResponse)
 async def list_responder_deployments(
     responder_id: UUID,
     db: AsyncSession = Depends(get_db),
-) -> list[ResponderDeploymentItem]:
+) -> ResponderDeploymentsResponse:
     return await responder_deployment_service.list_deployments(db=db, responder_id=responder_id)
 
 

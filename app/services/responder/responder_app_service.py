@@ -89,9 +89,15 @@ class ResponderAppService:
 
 
     async def get_unread_alerts_count(self, responder_id: UUID, db: AsyncSession) -> int:
+        # Same site scope as the feed — a badge that counts hidden alerts lies.
+        responder = await responder_crud.get(db=db, id=responder_id)
+        effective_site = (
+            responder.active_location_id or responder.location_id if responder else None
+        )
         return await notification_delivery_crud.get_unread_alerts_count(
             responder_id=responder_id,
             db=db,
+            effective_location_id=effective_site,
         )
 
 
@@ -103,12 +109,18 @@ class ResponderAppService:
         page_size: int = 20,
         notification_type: NotificationType | None = None,
     ) -> AlertPaginatedResponse:
+        # Presence-scoped feed: current site + site-less announcements only.
+        responder = await responder_crud.get(db=db, id=responder_id)
+        effective_site = (
+            responder.active_location_id or responder.location_id if responder else None
+        )
         deliveries, has_more = await notification_delivery_crud.get_alerts_per_responder(
             responder_id=responder_id,
             db=db,
             page=page,
             page_size=page_size,
             notification_type=notification_type,
+            effective_location_id=effective_site,
         )
 
         return AlertPaginatedResponse(
@@ -181,6 +193,16 @@ class ResponderAppService:
         )
         if dispatch is None or delivery is None:
             raise HTTPException(status_code=404, detail="Alert not found.")
+        responder: Responder = await responder_crud.get(db=db, id=current_responder.id)
+        if responder is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+        # The claim follows the feed's scoping: a dispatch for another site is
+        # not claimable even though the delivery still exists (e.g. the
+        # responder switched sites after the alert went out). NULL-site
+        # announcements stay claimable — they reached every site.
+        effective_site = responder.active_location_id or responder.location_id
+        if dispatch.location_id is not None and dispatch.location_id != effective_site:
+            raise HTTPException(status_code=404, detail="Alert not found.")
         if dispatch.type != NotificationType.BLOCKAGE:
             raise HTTPException(
                 status_code=403, detail="Alerts of this type cannot be claimed."
@@ -196,7 +218,6 @@ class ResponderAppService:
                 status_code=409, detail="This alert has already been handled."
             )
 
-        responder: Responder = await responder_crud.get(db=db, id=current_responder.id)
         dispatch.claimed_by = responder.id
         dispatch.claimed_at = datetime.now(timezone.utc)
         await db.commit()

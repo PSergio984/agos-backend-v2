@@ -135,6 +135,7 @@ class ResponderDetailsResponse(BaseModel):
 # other than the responder's home site (responder_deployments table).
 class ResponderDeploymentCreate(BaseModel):
     location_id: int
+    starts_at: datetime | None = None  # optional future start; defaults to now
     planned_ends_at: datetime | None = None  # optional planned end of the posting
 
 
@@ -146,6 +147,14 @@ class ResponderDeploymentItem(BaseModel):
     ends_at: datetime | None
     planned_ends_at: datetime | None
     created_by: UUID
+
+
+# "Sites a responder belongs to" = home site + every deployment.
+class ResponderDeploymentsResponse(BaseModel):
+    home_location_id: int
+    home_location_name: str
+    active_location_id: int | None
+    deployments: list[ResponderDeploymentItem]
 
 
 # For responders app

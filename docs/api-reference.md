@@ -101,14 +101,51 @@ Auth legend: `JWT` = admin token required, `SU` = superuser admin token required
 
 ---
 
+## Locations (`/locations`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/` | — | List sites (site pickers need it unauthenticated). Defaults to active only; `include_inactive=true` for the full registry. |
+| POST | `/` | JWT | Create a site. `name` (unique), `latitude`, `longitude`. 409 on name conflict. |
+| PUT | `/{location_id}` | JWT | Update name/coords/`is_active`. Deactivating a site stops its ingest and removes it from alert fan-out. |
+
+**POST /**
+```json
+// Request
+{ "name": "Site B — Riverside", "latitude": 14.71, "longitude": 120.97 }
+
+// Response 201
+{ "id": 2, "name": "Site B — Riverside", "latitude": 14.71, "longitude": 120.97, "is_active": true }
+```
+
+---
+
 ## Responders — Admin (`/responders`)
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/all` | JWT | List all responders. |
 | GET | `/additional-details/{responder_id}` | JWT | Detailed responder info (groups, push status, delivery stats). |
-| GET | `/template` | JWT | Download Excel template for responder bulk import. |
+| GET | `/template` | JWT | Download Excel template for responder bulk import. Includes a Site column (home site by name). |
 | POST | `/bulk` | JWT | Bulk create responders. |
+| PATCH | `/{responder_id}` | JWT | Update responder fields (including home `location_id`). |
+| GET | `/{responder_id}/deployments` | JWT | The responder's sites: home site + every deployment record. |
+| POST | `/{responder_id}/deployments` | JWT | Open a deployment to another site. Body: `location_id`, optional `starts_at`, `planned_ends_at`. Supersedes any open deployment; 409 if targeting the home site or an already-open site. |
+| POST | `/{responder_id}/deployments/{deployment_id}/close` | JWT | Close an open deployment (sets `ends_at`). 409 if already closed. |
+| PUT | `/{responder_id}/active-site` | JWT | Admin presence override — set active site to home or an open deployment site. `location_id: null` clears the override. |
+
+**GET /{responder_id}/deployments**
+```json
+// Response 200
+{
+  "home_location_id": 1,
+  "home_location_name": "Site A",
+  "active_location_id": 2,
+  "deployments": [
+    { "id": 7, "location_id": 2, "location_name": "Site B", "starts_at": "...", "ends_at": null, "planned_ends_at": null, "created_by": "admin-uuid" }
+  ]
+}
+```
 
 **POST /bulk**
 ```json
@@ -127,10 +164,13 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/{responder_id}` | RESP | Get responder profile for app. |
-| GET | `/unread-alerts-count/{responder_id}` | RESP | Count of unread alerts. |
-| GET | `/alerts/{responder_id}` | RESP | Paginated alerts. Params: `page`, `page_size`, `type` (optional filter). |
-| POST | `/acknowledge-alert` | RESP | Acknowledge an alert. |
+| GET | `/{responder_id}` | RESP | Get responder profile for app (includes `location_id`, `active_location_id`). |
+| PATCH | `/{responder_id}/profile` | RESP | Update own profile fields. |
+| GET | `/unread-alerts-count/{responder_id}` | RESP | Count of unacknowledged alerts — scoped to the responder's effective site (active site, else home). |
+| GET | `/alerts/{responder_id}` | RESP | Paginated alerts scoped to the effective site (site-less announcements included). Params: `page`, `page_size`, `type` (optional filter). |
+| POST | `/acknowledge-alert` | RESP | Acknowledge an alert (handling log — separate from claiming). |
+| POST | `/claim` | RESP | Take ownership of a shared blockage alert ("On it"). 409 if already claimed/acknowledged, 404 for other sites' dispatches. Rate limited: 20/min. Broadcasts `alert_claimed` to the dispatch's site. |
+| POST | `/active-site` | RESP | Set own active site — must be home site or an open deployment site. Body: `{ "location_id": int }`. |
 | GET | `/notif-preferences/{responder_id}` | RESP | Get notification preferences. |
 | PUT | `/notif-preferences/{responder_id}` | RESP | Update notification preference (key + value). |
 | GET | `/water-level-trend/{location_id}` | RESP | Last 24h water level trend (~50 data points). |
@@ -162,9 +202,27 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 { "success": true, "message": "OTP verified successfully.", "requires_resend": false, "responder_token": "eyJ..." }
 ```
 
+**POST /claim**
+```json
+// Request
+{ "dispatch_id": 7 }
+
+// Response 200
+{ "dispatch_id": 7, "claimed_by": "responder-uuid", "claimed_by_name": "Danny Cleaner", "claimed_at": "..." }
+```
+
+**POST /active-site**
+```json
+// Request
+{ "location_id": 2 }
+
+// Response 200
+{ "location_id": 1, "active_location_id": 2 }
+```
+
 **GET /alerts/{responder_id} Response**
 ```json
-{ "items": [{ "id": "uuid", "type": "critical", "title": "...", "message": "...", "timestamp": "...", "is_acknowledged": false, "acknowledged_at": null, "acknowledge_message": null }], "has_more": true }
+{ "items": [{ "id": "uuid", "dispatch_id": 7, "type": "critical", "title": "...", "message": "...", "timestamp": "...", "is_acknowledged": false, "acknowledged_at": null, "acknowledge_message": null, "location_id": 2, "claimed_by": null, "claimed_by_name": null, "claimed_at": null }], "has_more": true }
 ```
 
 ---
@@ -180,10 +238,24 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 
 ---
 
+## Camera Devices (`/camera-devices`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/` | JWT | List all registered cameras. |
+| POST | `/` | JWT | Register a camera on a site. Body: `location_id`, `device_name`, optional `stream_url`. |
+| PUT | `/{device_id}` | JWT | Update name/site binding/`stream_url`/`is_active`. Rebinding a device re-keys the site caches. |
+
+A camera can only ingest into its registered site (`/stream/upload-image`,
+`/ws/rpi` verify the binding and reject mismatches).
+
 ## Sensor Devices (`/sensor-devices`)
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
+| GET | `/` | JWT | List all registered sensors. |
+| POST | `/` | JWT | Register a sensor on a site. Body: `location_id`, `device_name`, `sensor_config`. |
+| PUT | `/{device_id}` | JWT | Update name/site binding/config/`is_active`. Config and rebinding changes re-key the sensor caches. |
 | GET | `/{id}/status` | JWT | Device connection status, signal strength. |
 | GET | `/{id}/config` | JWT | Sensor thresholds (installation_height, warning, critical). |
 | PUT | `/{id}/config` | JWT | Update sensor configuration. |
@@ -297,8 +369,9 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/status` | — | Camera online status. |
-| POST | `/upload-image` | IOT | Upload camera image. Params: `camera_device_id`, `location_id` — must match the device's registered site (400 on mismatch). Broadcasts `camera_update`, runs ML inference, broadcasts blockage/fusion updates. Rate limited: 35/min. |
+| GET | `/status` | — | Camera online status. Param: `location_id`. |
+| GET | `/latest-frame` | — | Newest received frame for a location (404 if none). Param: `location_id`. |
+| POST | `/upload-image` | IOT | Upload camera image. Param: `location_id`; optional `camera_device_id` — when omitted, the site's default active camera is used (legacy firmware). 400 if the device isn't bound to the claimed site. Broadcasts `camera_update`, runs ML inference, broadcasts blockage/fusion updates. Rate limited: 35/min. |
 
 ---
 
@@ -347,8 +420,8 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `WS /ws?location_id={id}` | — | Admin/responder client connection. Receives initial state, live sensor, blockage, weather, fusion, and camera-frame updates. |
-| `WS /ws/rpi?camera_device_id={id}&location_id={id}` | — | RPi camera connection. `location_id` must match the device's registered site (close 1008 on mismatch). Sends binary frames for live camera broadcast and ML inference. |
+| `WS /ws?location_id={id}` | optional `token` | Admin/responder client connection. Receives initial state, live sensor, blockage, weather, fusion, and camera-frame updates. With a responder `token`, the channel is derived from that responder's effective site (active site → home site) and `location_id` is ignored; invalid token closes 1008. Without a token, `location_id` picks the channel (admin/PWA monitors). |
+| `WS /ws/rpi?location_id={id}&camera_device_id={id}` | — | RPi camera connection. `camera_device_id` optional (legacy firmware sends `location_id` only; default camera resolved). `location_id` must match the device's registered site (close 1008 on mismatch). Sends binary frames for live camera broadcast and ML inference. |
 
 ### WebSocket Message Format
 
@@ -364,3 +437,4 @@ Client messages are JSON objects with a top-level `type` and `data`:
 | `weather_update` | `weather_condition` | Scheduled weather fetch |
 | `fusion_analysis_update` | `fusion_analysis` | Any data source update |
 | `camera_update` | `image`, `timestamp` | Camera frame received through `/stream/upload-image` or `/ws/rpi` |
+| `alert_claimed` | `dispatch_id`, `claimed_by`, `claimed_by_name`, `claimed_at` | A responder claimed a blockage alert — broadcast to the dispatch's site (or every site for a NULL-site announcement) |

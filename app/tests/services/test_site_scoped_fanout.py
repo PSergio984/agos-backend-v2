@@ -417,17 +417,71 @@ async def test_responder_alert_items_carry_dispatch_location():
     delivery.dispatch.claimed_by_responder = None
     delivery.dispatch.claimed_at = None
 
-    with patch(
-        f"{APP_MODULE}.notification_delivery_crud",
-        **{
-            "get_alerts_per_responder": AsyncMock(return_value=([delivery], False))
-        },
+    responder = MagicMock()
+    responder.active_location_id = SITE_B
+    responder.location_id = SITE_A
+    with (
+        patch(
+            f"{APP_MODULE}.notification_delivery_crud",
+            **{
+                "get_alerts_per_responder": AsyncMock(return_value=([delivery], False))
+            },
+        ),
+        patch(
+            f"{APP_MODULE}.responder_crud",
+            **{"get": AsyncMock(return_value=responder)},
+        ),
     ):
         res = await responder_app_service.get_responder_alerts(
             responder_id=uuid.uuid4(), db=AsyncMock()
         )
 
     assert res.items[0].location_id == SITE_B
+
+
+async def test_responder_alerts_scoped_to_effective_site():
+    # Active-site wins over home — the CRUD filter gets the deployment site.
+    responder = MagicMock()
+    responder.active_location_id = SITE_B
+    responder.location_id = SITE_A
+    crud_del = AsyncMock(return_value=([], False))
+    with (
+        patch(
+            f"{APP_MODULE}.notification_delivery_crud",
+            **{"get_alerts_per_responder": crud_del},
+        ),
+        patch(
+            f"{APP_MODULE}.responder_crud",
+            **{"get": AsyncMock(return_value=responder)},
+        ),
+    ):
+        await responder_app_service.get_responder_alerts(
+            responder_id=uuid.uuid4(), db=AsyncMock()
+        )
+
+    assert crud_del.await_args.kwargs["effective_location_id"] == SITE_B
+
+
+async def test_responder_alerts_home_site_when_no_active():
+    responder = MagicMock()
+    responder.active_location_id = None
+    responder.location_id = SITE_A
+    crud_del = AsyncMock(return_value=([], False))
+    with (
+        patch(
+            f"{APP_MODULE}.notification_delivery_crud",
+            **{"get_alerts_per_responder": crud_del},
+        ),
+        patch(
+            f"{APP_MODULE}.responder_crud",
+            **{"get": AsyncMock(return_value=responder)},
+        ),
+    ):
+        await responder_app_service.get_responder_alerts(
+            responder_id=uuid.uuid4(), db=AsyncMock()
+        )
+
+    assert crud_del.await_args.kwargs["effective_location_id"] == SITE_A
 
 
 async def test_delivery_log_items_carry_dispatch_location():

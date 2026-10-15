@@ -55,8 +55,10 @@ Admin JWT tokens use 15-minute access tokens plus 7-day refresh tokens. Responde
 
 Two WebSocket endpoints:
 
-1. **`/ws?location_id={id}`** — Frontend/responder clients. Receives real-time updates.
-2. **`/ws/rpi?camera_device_id={id}&location_id={id}`** — Raspberry Pi camera. Sends binary frames for ML inference.
+1. **`/ws?location_id={id}&token={jwt}`** — Frontend/responder clients. `token` is optional: a valid responder token pins the channel to that responder's effective site (active site, else home) and `location_id` is ignored; an invalid token closes 1008. Unauthenticated clients choose the channel via `location_id`.
+2. **`/ws/rpi?location_id={id}&camera_device_id={id}`** — Raspberry Pi camera. Sends binary frames for ML inference. `camera_device_id` is optional — legacy firmware sends `location_id` only and the site's default active camera is resolved.
+
+Both ingest paths verify the camera↔site binding (registered `location_id` must match) and reject devices on inactive sites.
 
 ### Message Types
 
@@ -67,6 +69,7 @@ Two WebSocket endpoints:
 | `weather_update` | Scheduled weather fetch (APScheduler) | Weather conditions from OpenMeteo |
 | `fusion_analysis_update` | Any of the above triggers recalculation | Combined risk score |
 | `camera_update` | `POST /stream/upload-image` or `WS /ws/rpi` binary frame | Base64 JPEG frame for the admin live camera panel |
+| `alert_claimed` | `POST /responder/claim` | A responder took a blockage alert — sent to the dispatch's site channel (every channel for a NULL-site announcement) |
 
 ### Data Ingestion → Broadcast Flow
 
@@ -96,17 +99,28 @@ APScheduler ──every N minutes──► WeatherService
                                     └──► WebSocket broadcast (weather_update + fusion_analysis_update)
 ```
 
+## Multi-Site Model
+
+A **location** is a monitored site. Everything operational is scoped to one:
+
+- **Responders** have a home site (`location_id`) and an optional active site (`active_location_id`, presence override — home or an open deployment site only).
+- **Deployments** (`responder_deployments`) are admin-managed temporary postings: `starts_at`/`planned_ends_at`/`ends_at`. A partial unique index allows at most one open deployment per responder; opening a new one supersedes the current one.
+- **Dispatches** carry `location_id` — detection-created alerts go only to responders whose effective site matches; NULL-site dispatches are announcements fanned out to every active site. Alert feeds, unread counts, and claim authorization are all scoped to the responder's effective site.
+- **Groups** are per-site (`groups.location_id`); `(name, location_id)` is unique with NULLS NOT DISTINCT, so each site gets its own `All Active Responders` group on responder activation.
+- **Devices** (`sensor_devices`, `camera_devices`) bind to a site with `is_active` flags; ingest is rejected for inactive devices and inactive sites. Legacy camera firmware without `camera_device_id` resolves the site's default active camera.
+- **Caches** key on device/site and are invalidated when the registry or site record changes.
+
 ## Notification System
 
 ### Push Notification Flow
 
 1. Admin triggers notification → `POST /push/send-notification`
-2. `NotificationService` creates `NotificationDispatch` record
-3. Looks up active responders with push subscriptions
+2. `NotificationService` creates `NotificationDispatch` record (site-scoped when triggered from detection)
+3. Looks up active responders on that site with push subscriptions
 4. Sends Web Push to each subscription via `pywebpush`
 5. Creates `NotificationDelivery` records (PENDING → SENT/FAILED)
 6. Responder's service worker receives push → native notification
-7. Responder acknowledges → `POST /responder/acknowledge-alert`
+7. Responder acknowledges → `POST /responder/acknowledge-alert`, or claims the alert → `POST /responder/claim`
 
 ### SMS OTP Flow
 
@@ -135,7 +149,8 @@ APScheduler ──every N minutes──► WeatherService
 - Sensor configuration (thresholds)
 - Alert thresholds
 
-Cache is populated on first access and invalidated on config updates.
+Cache is populated on first access and invalidated on config updates, device
+registry writes (create/update/rebind/deactivate), and site create/update.
 
 ## External Integrations
 
@@ -152,19 +167,26 @@ Cache is populated on first access and invalidated on config updates.
 | Endpoint | Limit | Reason |
 |----------|-------|--------|
 | `POST /auth/login` | 5/minute | Brute force prevention |
+| `POST /auth/refresh` | 10/minute | Token churn throttle |
 | `POST /auth/change-password` | 3/minute | Brute force prevention |
 | `POST /sensor-readings/record` | 60/minute | IoT device throttle |
 | `POST /stream/upload-image` | 35/minute | Camera frame throttle |
 | `POST /responder/for-approval` | 5/minute | OTP abuse prevention |
 | `POST /responder/resend-otp/{id}` | 3/minute | OTP resend abuse prevention |
 | `POST /responder/verify-otp` | 5/minute | OTP brute force prevention |
+| `POST /responder/send-sms` | 10/minute | SMS cost throttle |
+| `POST /responder/claim` | 20/minute | Claim spam prevention |
+| `POST /public/evacuation-route` | 20/minute | External API cost |
+| `POST,DELETE /push/subscribe-citizen` | 20/minute | Subscription churn |
+| `POST /analysis/reports`, `POST .../stream` | 6/minute | LLM cost throttle |
+| `GET /analysis/reports/{id}/pdf` | 10/minute | Report generation |
 
 ## File Structure
 
 ```
 app/
 ├── api/v1/
-│   ├── endpoints/          # 21 route handler files
+│   ├── endpoints/          # 26 route handler files
 │   └── router.py           # Central route registration
 ├── core/
 │   ├── config.py           # Pydantic settings (env vars)

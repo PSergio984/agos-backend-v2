@@ -37,8 +37,8 @@ async def get_latest_camera_frame(location_id: int = Query(...)):
 @limiter.limit("35/minute")
 async def upload_camera_image(
     request: Request,
-    camera_device_id: int,
     location_id: int,
+    camera_device_id: int | None = None,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_iot_api_key),
@@ -80,7 +80,7 @@ async def upload_camera_image(
 
     await ml_service.process_frame_bytes(
         image_bytes=image_bytes,
-        camera_device_id=camera_device_id,
+        camera_device_id=device.id,
         location_id=location_id,
     )
 

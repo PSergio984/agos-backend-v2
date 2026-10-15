@@ -100,18 +100,24 @@ relationship diagram.
 | name | VARCHAR(100) | UNIQUE, NOT NULL |
 | latitude | FLOAT | NOT NULL |
 | longitude | FLOAT | NOT NULL |
+| is_active | BOOLEAN | NOT NULL, server DEFAULT `true` |
+
+A location is a monitored site. `is_active = false` sites stop accepting
+ingest, are skipped by alert fan-out and cache rebuilds, and cannot be
+selected as a responder's active site.
 
 ### sensor_devices
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| location_id | INTEGER | FK → `locations.id`, UNIQUE, NOT NULL |
+| location_id | INTEGER | FK → `locations.id`, NOT NULL |
 | device_name | VARCHAR(100) | NOT NULL |
 | sensor_config | JSON | NOT NULL; `installation_height`, `warning_threshold`, `critical_threshold` |
+| is_active | BOOLEAN | NOT NULL, server DEFAULT `true` |
 
-The unique `location_id` constraint makes this a one-to-zero-or-one relationship
-from a location to a sensor device.
+A location may have multiple sensor devices; the "default device" for a site is
+the lowest-id active one. Inactive devices are rejected at ingest.
 
 ### sensor_readings
 
@@ -132,11 +138,14 @@ from a location to a sensor device.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| location_id | INTEGER | FK → `locations.id`, UNIQUE, NOT NULL |
+| location_id | INTEGER | FK → `locations.id`, NOT NULL |
 | device_name | VARCHAR(100) | NOT NULL |
+| stream_url | VARCHAR(500) | NULLABLE; optional stream/pull endpoint for the camera |
+| is_active | BOOLEAN | NOT NULL, server DEFAULT `true` |
 
-The unique `location_id` constraint makes this a one-to-zero-or-one relationship
-from a location to a camera device.
+A location may have multiple camera devices; the "default device" for a site is
+the lowest-id active one. Ingest endpoints take `camera_device_id`; legacy
+firmware that only sends `location_id` resolves the site's default camera.
 
 ### model_readings
 
@@ -204,7 +213,8 @@ from a location to a camera device.
 | first_name | VARCHAR(50) | NOT NULL |
 | last_name | VARCHAR(50) | NOT NULL |
 | status | `responderstatus` ENUM | NOT NULL; DB labels `PENDING` / `ACTIVE`; ORM default `PENDING` |
-| location_id | INTEGER | FK → `locations.id`, NOT NULL, server DEFAULT `1` |
+| location_id | INTEGER | FK → `locations.id`, NOT NULL; the responder's home site — no server default |
+| active_location_id | INTEGER | FK → `locations.id`, NULLABLE; admin/responder-set presence override — the site the responder is currently operating at |
 | activated_at | TIMESTAMPTZ | NULLABLE |
 | notif_preferences | JSON | NOT NULL; server default enables `warning`, `critical`, `blockage`, and `announcement` |
 | created_at | TIMESTAMPTZ | DEFAULT UTC now, NULLABLE in DB |
@@ -215,12 +225,18 @@ from a location to a camera device.
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| name | VARCHAR(100) | UNIQUE, NOT NULL |
+| name | VARCHAR(100) | NOT NULL |
+| location_id | INTEGER | FK → `locations.id`, NULLABLE; NULL = legacy/global group |
+
+**Unique constraint:** `uq_groups_name_location` on (`name`, `location_id`)
+with PostgreSQL `NULLS NOT DISTINCT` — same-named groups may exist across
+sites, but not twice in the same site nor twice globally.
 
 **Index:** `id`.
 
-The application seeds the default group `All Active Responders` and prevents it
-from being deleted.
+Each site gets its own `All Active Responders` group seeded on first use;
+the global (NULL-site) default group is kept for backward compatibility and
+cannot be deleted.
 
 ### responder_groups
 
@@ -230,6 +246,22 @@ from being deleted.
 | group_id | INTEGER | PK component, FK → `groups.id`, ON DELETE CASCADE, NOT NULL |
 
 **Composite primary key:** (`responder_id`, `group_id`).
+
+### responder_deployments
+
+| Column | Type | Constraints |
+|--------|------|-------------|
+| id | INTEGER | PK, AUTO, NOT NULL |
+| responder_id | UUID | FK → `responders.id`, NOT NULL |
+| location_id | INTEGER | FK → `locations.id`, NOT NULL; the site the responder is posted to (never the home site) |
+| starts_at | TIMESTAMPTZ | NOT NULL, server DEFAULT UTC now; optional client-supplied start overrides the default |
+| ends_at | TIMESTAMPTZ | NULLABLE; NULL = open posting |
+| planned_ends_at | TIMESTAMPTZ | NULLABLE; planned window end — informational, does not close the deployment |
+| created_by | UUID | FK → `admin_users.id`, NOT NULL |
+
+**Partial unique index:** `uq_responder_deployments_one_open` on
+(`responder_id`) `WHERE ends_at IS NULL` — at most one open deployment per
+responder, enforced in the database (not just in service code).
 
 ### responders_otp_verification
 
@@ -269,6 +301,9 @@ PostgreSQL enum by a migration. See [Known model/migration drift](#known-modelmi
 | title | VARCHAR | NOT NULL |
 | message | VARCHAR | NOT NULL |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT UTC now |
+| location_id | INTEGER | FK → `locations.id`, NULLABLE; the site the dispatch targeted — NULL = announcement fanned out to every site |
+| claimed_by | UUID | FK → `responders.id`, NULLABLE; responder who took the alert ("On it") |
+| claimed_at | TIMESTAMPTZ | NULLABLE |
 
 **Indexes:** `id` and `type`.
 

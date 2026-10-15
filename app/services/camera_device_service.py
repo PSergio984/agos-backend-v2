@@ -129,11 +129,20 @@ class CameraDeviceService:
         return CameraDeviceItem.model_validate(updated)
 
     async def get_for_ingest(
-        self, db: AsyncSession, camera_device_id: int, location_id: int
+        self, db: AsyncSession, camera_device_id: int | None, location_id: int
     ) -> CameraDevice | None:
         """Return the camera iff it exists, is active, belongs to an active
         site, and is bound to `location_id`. None on any binding failure —
-        callers map that to WS close 1008 / HTTP 400."""
+        callers map that to WS close 1008 / HTTP 400.
+
+        Legacy firmware sends no camera_device_id; resolve the site's
+        default active camera so those clients keep working."""
+        if camera_device_id is None:
+            camera_device_id = await camera_device_crud.get_id_by_location(
+                db=db, location_id=location_id
+            )
+            if camera_device_id is None:
+                return None
         device = await camera_device_crud.get(db=db, id=camera_device_id)
         if device is None or not device.is_active:
             return None

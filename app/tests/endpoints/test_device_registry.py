@@ -445,6 +445,35 @@ async def test_get_for_ingest_rejects_inactive_device():
     assert result is None
 
 
+async def test_get_for_ingest_legacy_resolves_default_camera():
+    # Legacy firmware sends only location_id — the site's default active
+    # camera is resolved and then bound the same way.
+    device = _device(id=7, location_id=1)
+    site = MagicMock(id=1, is_active=True)
+    with patch(
+        f"{MODULE}.camera_device_crud",
+        **{
+            "get_id_by_location": AsyncMock(return_value=7),
+            "get": AsyncMock(return_value=device),
+        },
+    ), patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}):
+        result = await camera_device_service.get_for_ingest(
+            db=AsyncMock(), camera_device_id=None, location_id=1
+        )
+    assert result is device
+
+
+async def test_get_for_ingest_legacy_no_camera_on_site():
+    with patch(
+        f"{MODULE}.camera_device_crud",
+        **{"get_id_by_location": AsyncMock(return_value=None)},
+    ):
+        result = await camera_device_service.get_for_ingest(
+            db=AsyncMock(), camera_device_id=None, location_id=9
+        )
+    assert result is None
+
+
 # ---------------------------------------------------------------------------
 # Ingest path — upload-image HTTP binding + /ws/rpi websocket binding
 # ---------------------------------------------------------------------------
@@ -528,6 +557,47 @@ def test_ws_rpi_bound_device_connects(anon_client):
             assert msg == {"type": "connected", "camera_device_id": 1, "location_id": 2}
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
+
+
+def test_ws_rpi_legacy_no_camera_device_id_connects(anon_client):
+    # Legacy firmware: location_id only — the service resolves the default.
+    device = _device(id=5, location_id=2)
+    with (
+        patch(
+            "app.api.v1.endpoints.websocket.AsyncSessionLocal",
+            new=_fake_session_factory(),
+        ),
+        patch.object(
+            camera_device_service, "get_for_ingest", new=AsyncMock(return_value=device)
+        ) as ingest,
+    ):
+        with anon_client.websocket_connect("/ws/rpi?location_id=2") as ws:
+            msg = ws.receive_json()
+            assert msg == {"type": "connected", "camera_device_id": 5, "location_id": 2}
+    assert ingest.await_args.kwargs["camera_device_id"] is None
+
+
+def test_upload_image_legacy_no_camera_device_id(iot_client):
+    device = _device(id=3, location_id=2)
+    with (
+        patch.object(
+            camera_device_service, "get_for_ingest", new=AsyncMock(return_value=device)
+        ) as ingest,
+        patch("app.api.v1.endpoints.stream.camera_status_service"),
+        patch("app.api.v1.endpoints.stream.ws_manager") as ws_mock,
+        patch("app.api.v1.endpoints.stream.ml_service") as ml_mock,
+    ):
+        ws_mock.broadcast_to_location = AsyncMock()
+        ml_mock.process_frame_bytes = AsyncMock()
+        res = iot_client.post(
+            "/api/v1/stream/upload-image?location_id=2",
+            files={"file": ("f.jpg", b"\xff\xd8\xff", "image/jpeg")},
+        )
+
+    assert res.status_code == 200
+    assert ingest.await_args.kwargs["camera_device_id"] is None
+    # ML runs against the resolved device id, not the missing param.
+    assert ml_mock.process_frame_bytes.await_args.kwargs["camera_device_id"] == 3
 
 
 # ---------------------------------------------------------------------------

@@ -102,21 +102,23 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @router.websocket("/ws/rpi")
 async def rpi_websocket_endpoint(websocket: WebSocket):
-    camera_device_id = websocket.query_params.get("camera_device_id")
-    location_id = websocket.query_params.get("location_id")
+    camera_device_id_raw = websocket.query_params.get("camera_device_id")
+    location_id_raw = websocket.query_params.get("location_id")
 
     await websocket.accept()
 
-    if not camera_device_id or not location_id:
+    if not location_id_raw:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason="Missing camera_device_id or location_id",
+            reason="Missing location_id",
         )
         return
 
     try:
-        camera_device_id = int(camera_device_id)
-        location_id = int(location_id)
+        # camera_device_id stays optional: legacy firmware identifies by
+        # location_id only and the service resolves the site's default camera.
+        camera_device_id = int(camera_device_id_raw) if camera_device_id_raw else None
+        location_id = int(location_id_raw)
     except ValueError:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
@@ -137,6 +139,7 @@ async def rpi_websocket_endpoint(websocket: WebSocket):
         )
         return
 
+    camera_device_id = bound_device.id
     await websocket.send_json(
         {
             "type": "connected",

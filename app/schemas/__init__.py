@@ -16,7 +16,7 @@ from .responder import ResponderListItem, ResponderDetailsResponse, ResponderSen
 from .responder import AcknowledgeNotifRequest, AcknowledgeNotifResponse
 from .responder import ClaimRequest, ClaimResponse
 from .responder import ResponderAdminUpdate, ResponderSelfUpdate
-from .responder import ResponderActiveSiteResponse, ResponderActiveSiteUpdate, ResponderAdminActiveSiteUpdate, ResponderDeploymentCreate, ResponderDeploymentItem
+from .responder import ResponderActiveSiteResponse, ResponderActiveSiteUpdate, ResponderAdminActiveSiteUpdate, ResponderDeploymentCreate, ResponderDeploymentItem, ResponderDeploymentsResponse
 
 from .reading_summary_response import SensorWebSocketResponse, SensorReadingSummary, WaterLevelSummary, AlertSummary
 from .reading_summary_response import ModelWebSocketResponse

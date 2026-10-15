@@ -20,6 +20,7 @@ from app.schemas import (
     AdminAuditLogCreate,
     ResponderDeploymentCreate,
     ResponderDeploymentItem,
+    ResponderDeploymentsResponse,
 )
 
 
@@ -37,15 +38,21 @@ def _to_item(deployment: ResponderDeployment, location_name: str) -> ResponderDe
 
 class ResponderDeploymentService:
 
-    async def list_deployments(self, db: AsyncSession, responder_id: UUID) -> list[ResponderDeploymentItem]:
+    async def list_deployments(self, db: AsyncSession, responder_id: UUID) -> ResponderDeploymentsResponse:
         responder = await responder_crud.get(db=db, id=responder_id)
         if responder is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Responder not found.",
             )
+        home = await location_crud.get(db=db, id=responder.location_id)
         deployments = await responder_deployment_crud.list_for_responder(db=db, responder_id=responder_id)
-        return [_to_item(d, location_name=d.location.name) for d in deployments]
+        return ResponderDeploymentsResponse(
+            home_location_id=responder.location_id,
+            home_location_name=home.name if home else "",
+            active_location_id=responder.active_location_id,
+            deployments=[_to_item(d, location_name=d.location.name) for d in deployments],
+        )
 
 
     async def open_deployment(
@@ -106,6 +113,7 @@ class ResponderDeploymentService:
             responder_id=responder_id,
             location_id=payload.location_id,
             created_by=current_user.id,
+            starts_at=payload.starts_at,
             planned_ends_at=payload.planned_ends_at,
         )
         await admin_audit_log_crud.create_only_no_commit(

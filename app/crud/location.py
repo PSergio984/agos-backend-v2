@@ -27,18 +27,21 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
 
 
     async def get_all_ids(self, db: AsyncSession) -> list[int]:
-
+        # Active sites only — callers fan out alerts / rebuild caches, and a
+        # deactivated site participates in neither.
         result = await db.execute(
-            select(self.model.id)
+            select(self.model.id).where(self.model.is_active.is_(True))
         )
         ids = result.scalars().all()
         return ids
 
 
     async def get_all_coordinates(self, db: AsyncSession):
-
+        # Same active-only scope: weather/fusion work for a deactivated site
+        # is wasted (and its devices no longer ingest).
         result = await db.execute(
             select(self.model.id, self.model.latitude, self.model.longitude)
+            .where(self.model.is_active.is_(True))
         )
         return result.all()
 

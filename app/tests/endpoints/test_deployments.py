@@ -17,6 +17,7 @@ from app.schemas.responder import (
     ResponderActiveSiteResponse,
     ResponderDeploymentCreate,
     ResponderDeploymentItem,
+    ResponderDeploymentsResponse,
 )
 from app.services.responder.responder_app_service import responder_app_service
 from app.services.responder.responder_deployment_service import responder_deployment_service
@@ -188,19 +189,28 @@ def test_close_deployment_already_closed_returns_409(admin_client):
 
 
 def test_list_deployments(admin_client):
+    payload = ResponderDeploymentsResponse(
+        home_location_id=HOME_SITE_ID,
+        home_location_name="Site A",
+        active_location_id=SITE_B_ID,
+        deployments=[DEPLOYMENT_ITEM],
+    )
     with patch.object(
         responder_deployment_service,
         "list_deployments",
-        new=AsyncMock(return_value=[DEPLOYMENT_ITEM]),
+        new=AsyncMock(return_value=payload),
     ):
         res = admin_client.get(f"/api/v1/responders/{RESPONDER_ID}/deployments")
 
     assert res.status_code == 200
     body = res.json()
-    assert len(body) == 1
-    assert body[0]["location_name"] == "Site B"
-    assert body[0]["starts_at"] is not None
-    assert body[0]["created_by"] == str(ADMIN_ID)
+    assert body["home_location_id"] == HOME_SITE_ID
+    assert body["home_location_name"] == "Site A"
+    assert body["active_location_id"] == SITE_B_ID
+    assert len(body["deployments"]) == 1
+    assert body["deployments"][0]["location_name"] == "Site B"
+    assert body["deployments"][0]["starts_at"] is not None
+    assert body["deployments"][0]["created_by"] == str(ADMIN_ID)
 
 
 def test_list_deployments_unknown_responder_returns_404(admin_client):
@@ -551,14 +561,17 @@ async def test_service_list_deployments_returns_site_names():
         _deployment(id=6, location_id=SITE_B_ID),
         _deployment(id=4, location_id=SITE_C_ID, location=_location(id=SITE_C_ID, name="Site C")),
     ]
-    cruds = _deployment_patches(responder=_responder(), deployments=deployments)
+    home = _location(id=HOME_SITE_ID, name="Home Base")
+    cruds = _deployment_patches(responder=_responder(), location=home, deployments=deployments)
     with cruds[0], cruds[1], cruds[2], cruds[3]:
-        items = await responder_deployment_service.list_deployments(
+        res = await responder_deployment_service.list_deployments(
             db=_db(), responder_id=RESPONDER_ID
         )
 
-    assert [i.location_name for i in items] == ["Site B", "Site C"]
-    assert [i.id for i in items] == [6, 4]
+    assert res.home_location_id == HOME_SITE_ID
+    assert res.home_location_name == "Home Base"
+    assert [i.location_name for i in res.deployments] == ["Site B", "Site C"]
+    assert [i.id for i in res.deployments] == [6, 4]
 
 
 async def test_service_list_deployments_unknown_responder_404():

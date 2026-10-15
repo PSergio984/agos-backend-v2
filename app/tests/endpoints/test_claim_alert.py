@@ -110,7 +110,7 @@ def _dispatch(**overrides):
     d.type = NotificationType.BLOCKAGE
     d.claimed_by = None
     d.claimed_at = None
-    d.location_id = 2  # site-B dispatch — deliberately not the claimer's site
+    d.location_id = 2
     for k, v in overrides.items():
         setattr(d, k, v)
     return d
@@ -121,13 +121,19 @@ def _responder(**overrides):
     r.id = RESPONDER_ID
     r.first_name = "Danny"
     r.last_name = "Cleaner"
-    r.location_id = 3
+    # Present at site 2 — the dispatch fixture's site — so a claim is legal.
+    r.location_id = 2
+    r.active_location_id = None
     for k, v in overrides.items():
         setattr(r, k, v)
     return r
 
 
 def _patches(dispatch=None, has_ack=False, responder=None, has_delivery=True):
+    if responder is None and dispatch is not None and has_delivery:
+        # The site gate reads the responder row before the type/claim checks —
+        # tests that reach past the delivery check need a real responder.
+        responder = _responder()
     return (
         patch(
             f"{MODULE}.notification_dispatch_crud",
@@ -172,7 +178,7 @@ async def test_service_claim_sets_fields_and_broadcasts():
     ws_mock.broadcast_update.assert_awaited_once()
     args, kwargs = ws_mock.broadcast_update.call_args
     assert args[0] == "alert_claimed"
-    # Broadcast goes to the DISPATCH's site channel (2), not the claimer's (3).
+    # Broadcast goes to the dispatch's site channel.
     assert kwargs["location_id"] == 2
     assert result.claimed_by_name == "Danny Cleaner"
 
@@ -273,6 +279,41 @@ async def test_service_claim_not_dispatched_to_responder_404():
                 db=AsyncMock(),
             )
     assert exc.value.status_code == 404
+
+
+async def test_service_claim_other_site_dispatch_404():
+    # Presence-scoped claims: the responder WAS sent this dispatch but has
+    # since moved — site 3 can't claim a site-2 alert.
+    crud_d, crud_del, crud_r, ws = _patches(
+        dispatch=_dispatch(),
+        responder=_responder(location_id=3),
+    )
+    with crud_d, crud_del, crud_r, ws:
+        with pytest.raises(HTTPException) as exc:
+            await responder_app_service.claim_alert(
+                dispatch_id=DISPATCH_ID,
+                current_responder=CurrentResponder(id=RESPONDER_ID),
+                db=AsyncMock(),
+            )
+    assert exc.value.status_code == 404
+
+
+async def test_service_claim_deployed_site_allowed():
+    # Deployed presence counts: home site is 3 but active_location_id=2 puts
+    # the responder on the dispatch's site.
+    dispatch = _dispatch()
+    crud_d, crud_del, crud_r, ws = _patches(
+        dispatch=dispatch,
+        responder=_responder(location_id=3, active_location_id=2),
+    )
+    with crud_d, crud_del, crud_r, ws:
+        result = await responder_app_service.claim_alert(
+            dispatch_id=DISPATCH_ID,
+            current_responder=CurrentResponder(id=RESPONDER_ID),
+            db=AsyncMock(),
+        )
+    assert result.dispatch_id == DISPATCH_ID
+    assert dispatch.claimed_by == RESPONDER_ID
 
 
 async def test_service_claim_foreign_site_dispatch_still_404():

@@ -17,15 +17,21 @@ class CRUDResponderDeployment(CRUDBase[ResponderDeployment, None, None]):
         responder_id: UUID,
         location_id: int,
         created_by: UUID,
+        starts_at: datetime | None = None,
         planned_ends_at: datetime | None = None,
     ) -> ResponderDeployment:
 
-        deployment = self.model(
-            responder_id=responder_id,
-            location_id=location_id,
-            created_by=created_by,
-            planned_ends_at=planned_ends_at,
-        )
+        # starts_at stays out of the constructor when unset so the column's
+        # server_default fills it — passing None would insert a literal NULL.
+        fields = {
+            "responder_id": responder_id,
+            "location_id": location_id,
+            "created_by": created_by,
+            "planned_ends_at": planned_ends_at,
+        }
+        if starts_at is not None:
+            fields["starts_at"] = starts_at
+        deployment = self.model(**fields)
         db.add(deployment)
         await db.flush()  # populate id + server-default starts_at; committed at the service layer
         return deployment
