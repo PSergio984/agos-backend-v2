@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rate_limiter import limiter
-from app.crud import evacuation_center_crud
+from app.crud import evacuation_center_crud, location_crud
 from app.schemas import (
     EvacuationRouteRequest,
     EvacuationRouteResponse,
@@ -31,6 +31,13 @@ async def get_public_evacuation_route(
     """Return a server-side walking route to a real, open evacuation center."""
     center = await evacuation_center_crud.get(db=db, id=payload.center_id)
     if center is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evacuation center not found.",
+        )
+
+    site = await location_crud.get(db=db, id=center.location_id)
+    if site is None or not site.is_active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Evacuation center not found.",

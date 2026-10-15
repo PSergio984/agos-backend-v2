@@ -375,6 +375,12 @@ class StateManager:
             return fusion_state
 
 
+    def stop_fusion_analysis_state(self, location_id: int) -> None:
+        """Park a site's fusion state — deactivation stops it serving stale
+        snapshots on /public/status and /iot/risk-score."""
+        self._fusion_analysis_states.pop(location_id, None)
+
+
     async def start_all_states(self) -> None:
         async with AsyncSessionLocal() as db:
             location_ids = await cache_service.get_all_location_ids(db=db)

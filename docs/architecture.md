@@ -186,14 +186,14 @@ registry writes (create/update/rebind/deactivate), and site create/update.
 ```
 app/
 ├── api/v1/
-│   ├── endpoints/          # 26 route handler files
+│   ├── endpoints/          # 26 route handler files (+ websocket.py mounted outside the v1 router)
 │   └── router.py           # Central route registration
 ├── core/
 │   ├── config.py           # Pydantic settings (env vars)
 │   ├── database.py         # Async engine + session factory
 │   ├── security.py         # JWT + Argon2
 │   └── exceptions.py       # Custom SMS exceptions
-├── crud/                   # 24 CRUD classes + CRUDBase
+├── crud/                   # 25 CRUD classes + CRUDBase
 ├── models/
 │   ├── data_sources/       # Location, SensorDevice, SensorReading, Weather, etc.
 │   └── responder_related/  # Responder, Group, NotificationDelivery, etc.
@@ -205,5 +205,7 @@ app/
     ├── responder_group/    # Group CRUD + validation
     ├── sensor_reading/     # Recording, trends, export
     ├── stream/             # Camera frame ingestion helpers
-    └── weather/            # OpenMeteo fetch, persistence, scheduling
+    ├── weather/            # OpenMeteo fetch, persistence, scheduling
+    └── *.py                # Flat singleton services: location, cache, system_settings,
+                            # evacuation_*, camera_device/sensor_device, websocket, push…
 ```

@@ -20,6 +20,12 @@ class EvacuationCenterService:
     async def get_by_location(
         self, db: AsyncSession, location_id: int
     ) -> list[EvacuationCenterResponse]:
+        site = await location_crud.get(db=db, id=location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Site not found or inactive.",
+            )
         centers = await evacuation_center_crud.get_by_location(db=db, location_id=location_id)
         return [EvacuationCenterResponse.model_validate(c) for c in centers]
 

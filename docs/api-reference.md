@@ -4,6 +4,8 @@ Base URL: `/api/v1`
 
 Auth legend: `JWT` = admin token required, `SU` = superuser admin token required, `RESP` = responder token required, `IOT` = IoT API key required, `—` = no auth.
 
+Scope: this reference covers the responder-admin and responder-app surfaces plus multi-site additions. Auxiliary endpoints (`/health`, `/weather`, `/daily-summary`, `/notification-logs`, `/notification-templates`, `/model-reading-logs`, `/simulate-anomaly`) and the `/ws` + `/ws/rpi` socket contracts live in `docs/architecture.md` and the OpenAPI schema.
+
 ---
 
 ## Auth (`/auth`)
@@ -177,7 +179,7 @@ Auth legend: `RESP` = responder JWT token required (issued after OTP verificatio
 | POST | `/for-approval` | — | Phone lookup → sends OTP. |
 | POST | `/resend-otp/{responder_id}` | — | Resend OTP. Returns nullable `dev_otp` (200). |
 | POST | `/verify-otp` | — | Verify OTP → activate responder. Returns `responder_token` on success. |
-| POST | `/send-sms` | — | Send SMS to multiple responders (204). |
+| POST | `/send-sms` | JWT | Send SMS to multiple responders (204). |
 
 **POST /for-approval**
 ```json

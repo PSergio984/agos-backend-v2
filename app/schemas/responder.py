@@ -140,6 +140,15 @@ class ResponderDeploymentCreate(BaseModel):
     starts_at: datetime | None = None  # optional future start; defaults to now
     planned_ends_at: datetime | None = None  # optional planned end of the posting
 
+    @field_validator("starts_at", "planned_ends_at")
+    @classmethod
+    def _aware(cls, v: datetime | None) -> datetime | None:
+        # Naive datetimes are interpreted as UTC by asyncpg — silently shifting
+        # windows for local-time clients. Require explicit tz info.
+        if v is not None and v.tzinfo is None:
+            raise ValueError("Datetime must include timezone information.")
+        return v
+
 
 class ResponderDeploymentItem(BaseModel):
     id: int

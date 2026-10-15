@@ -172,16 +172,17 @@ def _update_site_patches(updated, existing):
         patch.object(admin_audit_log_crud, "create_only_no_commit", new=AsyncMock()),
         patch.object(cache_service, "invalidate_location_caches"),
         patch.object(fusion_state_manager, "start_fusion_analysis_state"),
+        patch.object(fusion_state_manager, "stop_fusion_analysis_state"),
     )
 
 
 async def test_update_site_deactivation_clears_presence_and_deployments():
     from app.schemas import LocationUpdate
 
-    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p = _update_site_patches(
+    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p, stop_p = _update_site_patches(
         updated=_site_row(is_active=False), existing=_site_row()
     )
-    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p:
+    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p, stop_p as stop:
         result = await location_service.update_site(
             db=AsyncMock(), location_id=1, payload=LocationUpdate(is_active=False),
             current_user=MagicMock(id=uuid.uuid4()),
@@ -189,16 +190,17 @@ async def test_update_site_deactivation_clears_presence_and_deployments():
 
     clear.assert_awaited_once()
     close.assert_awaited_once()
+    stop.assert_called_once()  # dead site stops serving its frozen snapshot
     assert result.is_active is False
 
 
 async def test_update_site_other_changes_skip_cleanup():
     from app.schemas import LocationUpdate
 
-    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p = _update_site_patches(
+    get_p, name_p, upd_p, clear_p, close_p, audit_p, cache_p, fusion_p, stop_p = _update_site_patches(
         updated=_site_row(is_active=True), existing=_site_row()
     )
-    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p:
+    with get_p, name_p, upd_p, clear_p as clear, close_p as close, audit_p, cache_p, fusion_p, stop_p as stop:
         await location_service.update_site(
             db=AsyncMock(), location_id=1, payload=LocationUpdate(name="Renamed"),
             current_user=MagicMock(id=uuid.uuid4()),
@@ -206,3 +208,4 @@ async def test_update_site_other_changes_skip_cleanup():
 
     clear.assert_not_awaited()
     close.assert_not_awaited()
+    stop.assert_not_called()

@@ -384,6 +384,16 @@ class ResponderAppService:
 
     async def send_otp(self, responder: Responder, db: AsyncSession) -> str | None:
 
+        # A PENDING responder on a deactivated home site can never activate —
+        # don't burn an SMS on a verification verify_otp would reject anyway.
+        if responder.status == ResponderStatus.PENDING:
+            home_site = await location_crud.get(db=db, id=responder.location_id)
+            if home_site is None or not home_site.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Responder's home site is inactive — reassign before activating.",
+                )
+
         # Generate OTP
         otp = "".join(secrets.choice("0123456789") for _ in range(settings.OTP_LENGTH))
         otp_hash = get_otp_hash(otp=otp)

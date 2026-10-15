@@ -118,6 +118,10 @@ class LocationService:
                 sensor_device_id=None,
                 camera_device_id=None,
             )
+        elif deactivating:
+            # A retired site must stop serving its last snapshot — the parked
+            # state would report a frozen (possibly critical) risk forever.
+            fusion_state_manager.stop_fusion_analysis_state(location_id=updated.id)
         return LocationResponse.model_validate(updated)
 
 
