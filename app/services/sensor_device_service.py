@@ -9,13 +9,14 @@ from app.schemas import (
     SensorDeviceStatusResponse,
     SensorDeviceUpdate,
 )
-from app.crud import admin_audit_log_crud, location_crud, sensor_device_crud
+from app.crud import admin_audit_log_crud, sensor_device_crud
 from app.crud import sensor_reading_crud
 from datetime import datetime, timedelta
 from fastapi import HTTPException, status
 from app.api.v1.dependencies import CurrentUser
 from app.core.config import settings
 from app.services import sensor_reading_service
+from app.services.location_service import require_active_site
 from app.services.cache_service import cache_service
 
 
@@ -108,7 +109,7 @@ class SensorDeviceService:
     async def register_device(
         self, db: AsyncSession, payload: SensorDeviceCreate, current_user: CurrentUser
     ) -> SensorDeviceItem:
-        location = await self._require_active_site(db=db, location_id=payload.location_id)
+        location = await require_active_site(db=db, location_id=payload.location_id)
         existing = await sensor_device_crud.get_by_name_and_location(
             db=db, device_name=payload.device_name, location_id=payload.location_id
         )
@@ -168,7 +169,7 @@ class SensorDeviceService:
         )
 
         if payload.location_id is not None and payload.location_id != device.location_id:
-            await self._require_active_site(db=db, location_id=payload.location_id)
+            await require_active_site(db=db, location_id=payload.location_id)
         clash = await sensor_device_crud.get_by_name_and_location(
             db=db, device_name=new_name, location_id=new_location_id
         )
@@ -207,20 +208,5 @@ class SensorDeviceService:
         if "location_id" in changes or "is_active" in changes:
             cache_service.invalidate_device_caches()
         return SensorDeviceItem.model_validate(updated)
-
-    async def _require_active_site(self, db: AsyncSession, location_id: int):
-        location = await location_crud.get(db=db, id=location_id)
-        if location is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Site not found.",
-            )
-        if not location.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Site is inactive.",
-            )
-        return location
-
 
 sensor_device_service = SensorDeviceService()

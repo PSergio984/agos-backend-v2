@@ -171,7 +171,7 @@ def _update_site_patches(updated, existing):
         responder_deployment_crud,
     )
     return (
-        patch.object(location_crud, "get", new=AsyncMock(return_value=existing)),
+        patch.object(location_crud, "get_with_lock", new=AsyncMock(return_value=existing)),
         patch.object(location_crud, "get_by_name", new=AsyncMock(return_value=None)),
         patch.object(location_crud, "update_no_commit", new=AsyncMock(return_value=updated)),
         patch.object(responder_crud, "clear_active_site", new=AsyncMock()),

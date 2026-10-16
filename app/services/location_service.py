@@ -70,7 +70,10 @@ class LocationService:
         self, db: AsyncSession, location_id: int, payload: LocationUpdate,
         current_user: CurrentUser
     ) -> LocationResponse:
-        location = await location_crud.get(db=db, id=location_id)
+        # FOR UPDATE: deactivation mutates the row, and every gated writer's
+        # FOR SHARE check serializes against this lock — a writer can't pass
+        # an is_active check while deactivation is mid-flight.
+        location = await location_crud.get_with_lock(db=db, id=location_id)
         if location is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -126,3 +129,21 @@ class LocationService:
 
 
 location_service = LocationService()
+
+
+async def require_active_site(db: AsyncSession, location_id: int):
+    """Shared writable-site gate: FOR SHARE read of the location row so the
+    caller's write serializes against `update_site` deactivation. Raises 404
+    on unknown site, 400 on inactive."""
+    location = await location_crud.get_for_share(db=db, id=location_id)
+    if location is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Site not found.",
+        )
+    if not location.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Site is inactive.",
+        )
+    return location

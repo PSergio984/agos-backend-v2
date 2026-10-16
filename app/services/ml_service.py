@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from app.core.cloudinary import upload_image
-from app.crud import model_readings_crud
+from app.crud import model_readings_crud, location_crud
 from app.schemas import ModelReadingCreate, ModelWebSocketResponse, BlockageStatus, ObstructionConfidence
 from app.core.database import AsyncSessionLocal
 from app.services.websocket_service import websocket_service
@@ -131,6 +131,12 @@ class MLService:
         image_url = upload_result["secure_url"] if upload_result else f"rpi_frame_{public_id}.jpg"
 
         async with AsyncSessionLocal() as db:
+            # The gated write lives in this session, not the request's — the
+            # check must run here under FOR SHARE so a frame can't land on a
+            # site deactivated while inference+upload were in flight.
+            site = await location_crud.get_for_share(db=db, id=location_id)
+            if site is None or not site.is_active:
+                return {}
             obj_in = ModelReadingCreate(
                 camera_device_id=camera_device_id,
                 image_path=image_url,

@@ -353,7 +353,10 @@ def _deployment_patches(
         ),
         patch(
             f"{MODULE}.location_crud",
-            **{"get": AsyncMock(return_value=location)},
+            **{
+                "get": AsyncMock(return_value=location),
+                "get_for_share": AsyncMock(return_value=location),
+            },
         ),
         patch(f"{MODULE}.responder_deployment_crud", dep_crud),
         patch(
@@ -603,7 +606,10 @@ def _app_patches(responder=None, open_deployment=None, location=None):
         ),
         patch(
             f"{APP_MODULE}.location_crud",
-            **{"get": AsyncMock(return_value=location)},
+            **{
+                "get": AsyncMock(return_value=location),
+                "get_for_share": AsyncMock(return_value=location),
+            },
         ),
     )
 

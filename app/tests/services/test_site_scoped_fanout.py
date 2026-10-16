@@ -333,7 +333,10 @@ def _verify_patches(responder):
         ),
         patch(
             f"{APP_MODULE}.location_crud",
-            **{"get": AsyncMock(return_value=MagicMock(is_active=True))},
+            **{
+                "get": AsyncMock(return_value=MagicMock(is_active=True)),
+                "get_for_share": AsyncMock(return_value=MagicMock(is_active=True)),
+            },
         ),
     )
 

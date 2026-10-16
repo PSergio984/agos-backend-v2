@@ -46,7 +46,8 @@ async def subscribe_citizen(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Anonymous, location-scoped citizen push subscription (F4/F6). No auth, no PII."""
-    location = await location_crud.get(db=db, id=data.location_id)
+    # FOR SHARE: the upsert serializes against site deactivation.
+    location = await location_crud.get_for_share(db=db, id=data.location_id)
     if location is None:
         raise HTTPException(status_code=404, detail="Location not found")
     if not location.is_active:

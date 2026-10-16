@@ -274,6 +274,16 @@ class ResponderAppService:
         """Presence: the responder marks which site they're on. Valid choices
         are their home site or the site of their open deployment — anything
         else means they're not a member there."""
+        # Deadlock ordering: location before responder (update_site holds the
+        # location lock while updating responder rows). FOR SHARE serializes
+        # the is_active gate against deactivation.
+        target = await location_crud.get_for_share(db=db, id=location_id)
+        if target is None or not target.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="That site is not active.",
+            )
+
         # Lock the responder row so a concurrent deployment close can't race
         # this write (the close path clears active_location_id under the lock).
         responder: Responder = await responder_crud.get_with_lock(db=db, id=responder_id)
@@ -295,15 +305,6 @@ class ResponderAppService:
                     status_code=400,
                     detail="Responder is not deployed to that site.",
                 )
-
-        # Presence on a deactivated site is meaningless — applies to the home
-        # site too, since a site can be deactivated while it's someone's home.
-        target = await location_crud.get(db=db, id=location_id)
-        if target is None or not target.is_active:
-            raise HTTPException(
-                status_code=400,
-                detail="That site is not active.",
-            )
 
         responder.active_location_id = location_id
         db.add(responder)
@@ -387,7 +388,7 @@ class ResponderAppService:
         # A PENDING responder on a deactivated home site can never activate —
         # don't burn an SMS on a verification verify_otp would reject anyway.
         if responder.status == ResponderStatus.PENDING:
-            home_site = await location_crud.get(db=db, id=responder.location_id)
+            home_site = await location_crud.get_for_share(db=db, id=responder.location_id)
             if home_site is None or not home_site.is_active:
                 raise HTTPException(
                     status_code=409,
@@ -481,6 +482,15 @@ class ResponderAppService:
                 name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
                 location_id=responder.location_id,
             )
+            # ensure_exists' internal commit released any lock — re-check the
+            # site under FOR SHARE so activation serializes against
+            # deactivation in the same txn as the gated writes below.
+            home_site = await location_crud.get_for_share(db=db, id=responder.location_id)
+            if home_site is None or not home_site.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Responder's home site is inactive — reassign before activating.",
+                )
             await responder_crud.activate(db=db, responder_id=verify_request.responder_id, commit=False)
             await responder_group_crud.add_member(db=db, group_id=active_group.id, responder_id=verify_request.responder_id, commit=False)
         await responder_otp_verification_crud.delete_by_responder_id(db=db, responder_id=verify_request.responder_id)

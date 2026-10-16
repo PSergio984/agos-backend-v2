@@ -62,16 +62,11 @@ class ResponderDeploymentService:
         payload: ResponderDeploymentCreate,
         current_user: CurrentUser,
     ) -> ResponderDeploymentItem:
-        # Lock the responder row so open/close/active-site can't interleave —
-        # "at most one open deployment" is enforced here under the responder's
-        # row lock AND by uq_responder_deployments_one_open (partial index).
-        responder = await responder_crud.get_with_lock(db=db, id=responder_id)
-        if responder is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Responder not found.",
-            )
-        location = await location_crud.get(db=db, id=payload.location_id)
+        # Deadlock ordering: location before responder. update_site holds the
+        # location row lock while updating responder rows, so taking the
+        # responder lock first here would cycle. FOR SHARE on the site row
+        # serializes the is_active check against deactivation.
+        location = await location_crud.get_for_share(db=db, id=payload.location_id)
         if location is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -81,6 +76,15 @@ class ResponderDeploymentService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Site is inactive.",
+            )
+        # Lock the responder row so open/close/active-site can't interleave —
+        # "at most one open deployment" is enforced here under the responder's
+        # row lock AND by uq_responder_deployments_one_open (partial index).
+        responder = await responder_crud.get_with_lock(db=db, id=responder_id)
+        if responder is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Responder not found.",
             )
         if payload.location_id == responder.location_id:
             raise HTTPException(

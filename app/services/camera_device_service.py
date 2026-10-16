@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
 from app.crud import admin_audit_log_crud, camera_device_crud, location_crud
+from app.services.location_service import require_active_site
 from app.services.cache_service import cache_service
 from app.models import CameraDevice
 from app.schemas import (
@@ -33,7 +34,7 @@ class CameraDeviceService:
     async def register_device(
         self, db: AsyncSession, payload: CameraDeviceCreate, current_user: CurrentUser
     ) -> CameraDeviceItem:
-        location = await self._require_active_site(db=db, location_id=payload.location_id)
+        location = await require_active_site(db=db, location_id=payload.location_id)
         existing = await camera_device_crud.get_by_name_and_location(
             db=db, device_name=payload.device_name, location_id=payload.location_id
         )
@@ -92,7 +93,7 @@ class CameraDeviceService:
         )
 
         if payload.location_id is not None and payload.location_id != device.location_id:
-            await self._require_active_site(db=db, location_id=payload.location_id)
+            await require_active_site(db=db, location_id=payload.location_id)
         clash = await camera_device_crud.get_by_name_and_location(
             db=db, device_name=new_name, location_id=new_location_id
         )
@@ -149,25 +150,11 @@ class CameraDeviceService:
         if device.location_id != location_id:
             return None
         # A deactivated site stops accepting frames even while its devices
-        # are still individually marked active.
-        site = await location_crud.get(db=db, id=device.location_id)
+        # are still individually marked active. FOR SHARE serializes the gate
+        # against deactivation without serializing concurrent frame uploads.
+        site = await location_crud.get_for_share(db=db, id=device.location_id)
         if site is None or not site.is_active:
             return None
         return device
-
-    async def _require_active_site(self, db: AsyncSession, location_id: int):
-        location = await location_crud.get(db=db, id=location_id)
-        if location is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Site not found.",
-            )
-        if not location.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Site is inactive.",
-            )
-        return location
-
 
 camera_device_service = CameraDeviceService()
