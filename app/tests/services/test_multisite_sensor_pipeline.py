@@ -185,7 +185,7 @@ async def test_record_reading_rejects_reading_for_inactive_site(monkeypatch):
     )
     monkeypatch.setattr(
         location_crud,
-        "get",
+        "get_for_share",
         AsyncMock(return_value=SimpleNamespace(id=3, is_active=False)),
     )
     create = AsyncMock()

@@ -263,7 +263,12 @@ def _device(**overrides):
 
 def _service_patches(location=None, clash=None, created=None, device=None):
     return (
-        patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=location)}),
+        # register/update gate lives in location_service.require_active_site —
+        # patch the crud name in that module's namespace.
+        patch("app.services.location_service.location_crud", **{
+            "get": AsyncMock(return_value=location),
+            "get_for_share": AsyncMock(return_value=location),
+        }),
         patch(
             f"{MODULE}.camera_device_crud",
             **{
@@ -398,7 +403,10 @@ async def test_get_for_ingest_returns_device_when_bound():
     site = MagicMock(id=1, is_active=True)
     with (
         patch(f"{MODULE}.camera_device_crud", **{"get": AsyncMock(return_value=device)}),
-        patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}),
+        patch(f"{MODULE}.location_crud", **{
+            "get": AsyncMock(return_value=site),
+            "get_for_share": AsyncMock(return_value=site),
+        }),
     ):
         result = await camera_device_service.get_for_ingest(
             db=AsyncMock(), camera_device_id=1, location_id=1
@@ -411,7 +419,10 @@ async def test_get_for_ingest_rejects_inactive_site():
     site = MagicMock(id=1, is_active=False)
     with (
         patch(f"{MODULE}.camera_device_crud", **{"get": AsyncMock(return_value=device)}),
-        patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}),
+        patch(f"{MODULE}.location_crud", **{
+            "get": AsyncMock(return_value=site),
+            "get_for_share": AsyncMock(return_value=site),
+        }),
     ):
         result = await camera_device_service.get_for_ingest(
             db=AsyncMock(), camera_device_id=1, location_id=1
@@ -456,7 +467,10 @@ async def test_get_for_ingest_legacy_resolves_default_camera():
             "get_id_by_location": AsyncMock(return_value=7),
             "get": AsyncMock(return_value=device),
         },
-    ), patch(f"{MODULE}.location_crud", **{"get": AsyncMock(return_value=site)}):
+    ), patch(f"{MODULE}.location_crud", **{
+        "get": AsyncMock(return_value=site),
+        "get_for_share": AsyncMock(return_value=site),
+    }):
         result = await camera_device_service.get_for_ingest(
             db=AsyncMock(), camera_device_id=None, location_id=1
         )

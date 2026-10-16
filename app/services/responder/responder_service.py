@@ -68,8 +68,9 @@ class ResponderService:
 
         # Home site is client-supplied now — a bad id must surface as a 400,
         # not a FK-violation 500, and inactive sites aren't valid homes.
+        # FOR SHARE: the insert below must serialize against site deactivation.
         location_ids = {r.location_id for r in responders}
-        active_ids = await location_crud.get_active_ids(db=db, ids=list(location_ids))
+        active_ids = await location_crud.get_active_ids_for_share(db=db, ids=list(location_ids))
         invalid_ids = location_ids - active_ids
         if invalid_ids:
             raise HTTPException(
@@ -135,6 +136,17 @@ class ResponderService:
                 await responder_group_crud.remove_member(
                     db=db, group_id=old_group.id, responder_id=responder_id,
                     commit=False,
+                )
+
+        if payload.location_id is not None:
+            # ensure_exists above may have committed internally, releasing
+            # any earlier lock — re-verify the target site under FOR SHARE in
+            # the same txn as update_details so the home-site move serializes
+            # against deactivation.
+            site = await location_crud.get_for_share(db=db, id=payload.location_id)
+            if site is None or not site.is_active:
+                raise HTTPException(
+                    status_code=404, detail="Site not found or inactive."
                 )
 
         updated = await responder_crud.update_details(

@@ -32,7 +32,7 @@ class EvacuationCenterService:
     async def create_center(
         self, db: AsyncSession, payload: EvacuationCenterCreate, current_user: CurrentUser
     ) -> EvacuationCenterResponse:
-        site = await location_crud.get(db=db, id=payload.location_id)
+        site = await location_crud.get_for_share(db=db, id=payload.location_id)
         if site is None or not site.is_active:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

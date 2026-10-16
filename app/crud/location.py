@@ -47,6 +47,38 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
         return ids
 
 
+    async def get_for_share(self, db: AsyncSession, id: int) -> Location | None:
+        """SELECT … FOR SHARE — for writers that check `is_active` and then
+        write a DIFFERENT table (deployments, presence, readings, centers,
+        subscriptions, responder rows). A share lock blocks `update_site`'s
+        deactivation UPDATE until this txn commits without serializing
+        concurrent gated writers against each other. Deadlock ordering:
+        location locks must be taken before responder row locks, since
+        `update_site` holds the location lock while updating responder rows.
+        """
+        result = await db.execute(
+            select(self.model)
+            .filter(self.model.id == id)
+            .with_for_update(read=True)
+        )
+        return result.scalars().first()
+
+
+    async def get_active_ids_for_share(self, db: AsyncSession, ids: list[int]) -> set[int]:
+        """FOR SHARE variant of get_active_ids — bulk writers that assign
+        responders to sites serialize the check against deactivation.
+        Ordered so multi-row lock acquisition is deterministic."""
+        result = await db.execute(
+            select(self.model.id)
+            .where(
+                self.model.id.in_(ids), self.model.is_active.is_(True)
+            )
+            .order_by(self.model.id)
+            .with_for_update(read=True)
+        )
+        return set(result.scalars().all())
+
+
     async def get_all_coordinates(self, db: AsyncSession):
         # Same active-only scope: weather/fusion work for a deactivated site
         # is wasted (and its devices no longer ingest).

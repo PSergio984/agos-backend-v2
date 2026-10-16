@@ -92,7 +92,7 @@ class EvacuationService:
         # otherwise fail on the FK at commit; an inactive one shouldn't get
         # citizen pushes or live alerts. Checked before the dedup guard so a
         # rejected call never poisons the double-dispatch cache.
-        site = await location_crud.get(db=db, id=payload.location_id)
+        site = await location_crud.get_for_share(db=db, id=payload.location_id)
         if site is None or not site.is_active:
             raise HTTPException(status_code=400, detail="Site is not active.")
 
@@ -148,6 +148,13 @@ class EvacuationService:
             data=alert_payload.model_dump(mode="json"),
             location_id=payload.location_id,
         )
+
+        # send_to_citizen_subscribers commits internally, releasing the site
+        # lock — re-check under FOR SHARE so the audit row can't land on a site
+        # deactivated between the dispatch and this write.
+        site = await location_crud.get_for_share(db=db, id=payload.location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(status_code=400, detail="Site is not active.")
 
         # 3. Audit row — the authorization happened regardless of subscriber count.
         event = await evacuation_event_crud.create_event(

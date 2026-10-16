@@ -106,8 +106,9 @@ class SensorReadingService:
             )
 
         # A deactivated site stops accepting readings even while its devices
-        # are still individually marked active.
-        site = await location_crud.get(db=db, id=sensor_device.location_id)
+        # are still individually marked active. FOR SHARE serializes the gate
+        # against site deactivation without serializing concurrent ingest.
+        site = await location_crud.get_for_share(db=db, id=sensor_device.location_id)
         if site is None or not site.is_active:
             return SensorDataRecordedResponse(
                 timestamp=datetime.now(timezone.utc),
