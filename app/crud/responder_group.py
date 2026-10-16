@@ -12,11 +12,16 @@ from app.models.responder_related.responders import responder_groups
 
 class CRUDResponderGroup(CRUDBase[Group, None, None]):
     
-    async def get_by_name(self, db: AsyncSession, name: str) -> Group | None:
+    async def get_by_name_and_location(self, db: AsyncSession, name: str, location_id: int | None) -> Group | None:
 
-        result = await db.execute(
-            select(self.model).where(self.model.name == name)
-        )
+        """Find a group by name within one site. location_id=None matches the
+        legacy global (NULL-site) group, never a site-scoped one."""
+        stmt = select(self.model).where(self.model.name == name)
+        if location_id is None:
+            stmt = stmt.where(self.model.location_id.is_(None))
+        else:
+            stmt = stmt.where(self.model.location_id == location_id)
+        result = await db.execute(stmt)
         return result.scalars().first()
 
 
@@ -86,21 +91,15 @@ class CRUDResponderGroup(CRUDBase[Group, None, None]):
         return group, added_count, removed_count
 
 
-    async def name_exists(self, db: AsyncSession, name: str) -> bool:
+    async def ensure_exists(self, db: AsyncSession, name: str, location_id: int | None = None) -> Group:
 
-        result = await db.execute(
-            select(self.model).where(self.model.name == name)
-        )
-        return result.scalars().first() is not None
-
-
-    async def ensure_exists(self, db: AsyncSession, name: str) -> Group:
-
-        existing = await self.get_by_name(db=db, name=name)
+        """Get or create the named group within a site. location_id=None resolves
+        the legacy global (NULL-site) group; a site id resolves that site's group."""
+        existing = await self.get_by_name_and_location(db=db, name=name, location_id=location_id)
         if existing:
             return existing
 
-        group = self.model(name=name)
+        group = self.model(name=name, location_id=location_id)
         db.add(group)
 
         # try except to avoid race condition on unique name
@@ -108,7 +107,7 @@ class CRUDResponderGroup(CRUDBase[Group, None, None]):
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            existing = await self.get_by_name(db=db, name=name)
+            existing = await self.get_by_name_and_location(db=db, name=name, location_id=location_id)
             if existing:
                 return existing
             raise
@@ -117,17 +116,35 @@ class CRUDResponderGroup(CRUDBase[Group, None, None]):
 
 
     async def add_member(
-            self, 
-            db: AsyncSession, 
-            group_id: int, 
-            responder_id: UUID, 
-            *, 
+            self,
+            db: AsyncSession,
+            group_id: int,
+            responder_id: UUID,
+            *,
             commit: bool = True) -> None:
 
         await db.execute(
             insert(responder_groups).values(
                 responder_id=responder_id,
                 group_id=group_id,
+            )
+        )
+        if commit:
+            await db.commit()
+
+
+    async def remove_member(
+            self,
+            db: AsyncSession,
+            group_id: int,
+            responder_id: UUID,
+            *,
+            commit: bool = True) -> None:
+
+        await db.execute(
+            delete(responder_groups).where(
+                responder_groups.c.group_id == group_id,
+                responder_groups.c.responder_id == responder_id,
             )
         )
         if commit:

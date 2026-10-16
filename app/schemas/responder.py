@@ -56,7 +56,8 @@ class ResponderBase(BaseModel):
         return cleaned
 
 class ResponderCreate(ResponderBase):
-    pass
+    # Multi-site: a responder's home site is explicit, never silently site 1.
+    location_id: int
 
 
 def _validate_name(v: str | None) -> str | None:
@@ -83,6 +84,8 @@ class ResponderAdminUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     phone_number: str | None = None
+    # Home-site reassignment — must be an existing site.
+    location_id: int | None = None
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -115,6 +118,7 @@ class ResponderListItem(BaseModel):
     last_name: str
     phone_number: str
     status: ResponderStatus
+    location_id: int
     has_push_subscription: bool = False
 
     class Config:
@@ -129,6 +133,41 @@ class ResponderDetailsResponse(BaseModel):
         from_attributes = True
 
 
+# Admin-managed membership: a deployment is a temporary posting to a site
+# other than the responder's home site (responder_deployments table).
+class ResponderDeploymentCreate(BaseModel):
+    location_id: int
+    starts_at: datetime | None = None  # optional future start; defaults to now
+    planned_ends_at: datetime | None = None  # optional planned end of the posting
+
+    @field_validator("starts_at", "planned_ends_at")
+    @classmethod
+    def _aware(cls, v: datetime | None) -> datetime | None:
+        # Naive datetimes are interpreted as UTC by asyncpg — silently shifting
+        # windows for local-time clients. Require explicit tz info.
+        if v is not None and v.tzinfo is None:
+            raise ValueError("Datetime must include timezone information.")
+        return v
+
+
+class ResponderDeploymentItem(BaseModel):
+    id: int
+    location_id: int
+    location_name: str
+    starts_at: datetime
+    ends_at: datetime | None
+    planned_ends_at: datetime | None
+    created_by: UUID
+
+
+# "Sites a responder belongs to" = home site + every deployment.
+class ResponderDeploymentsResponse(BaseModel):
+    home_location_id: int
+    home_location_name: str
+    active_location_id: int | None
+    deployments: list[ResponderDeploymentItem]
+
+
 # For responders app
 class ResponderDetails(BaseModel):
     id: str
@@ -138,8 +177,29 @@ class ResponderDetails(BaseModel):
     phone_number: str
     location_id: int
     location_name: str
+    active_location_id: int | None
+    active_location_name: str | None
+    # Sites the responder may mark presence on beyond home — the picker's list.
+    deployments: list[ResponderDeploymentItem]
     created_at: datetime
     activated_at: datetime | None
+
+
+# Responder-controlled presence: which eligible site (home or open
+# deployment) the responder is currently on.
+class ResponderActiveSiteUpdate(BaseModel):
+    location_id: int
+
+
+class ResponderActiveSiteResponse(BaseModel):
+    location_id: int
+    active_location_id: int | None
+
+
+# Admin override of presence — unlike the responder's own update this allows
+# null, which clears the override back to the home-site fallback.
+class ResponderAdminActiveSiteUpdate(BaseModel):
+    location_id: int | None = None
 
 
 class NotifPreferenceUpdateRequest(BaseModel):
@@ -157,6 +217,7 @@ class AlertListItem(BaseModel):
     is_acknowledged: bool
     acknowledged_at: datetime | None
     acknowledge_message: str | None
+    location_id: int | None = None
     claimed_by: UUID | None = None
     claimed_by_name: str | None = None
     claimed_at: datetime | None = None

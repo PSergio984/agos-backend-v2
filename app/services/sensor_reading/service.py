@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.state import fusion_state_manager
-from app.crud import sensor_reading_crud, sensor_device_crud
+from app.crud import location_crud, sensor_reading_crud, sensor_device_crud
 from app.models import SensorReading
 from app.schemas import (
     SensorReadingCreate,
@@ -96,13 +96,27 @@ class SensorReadingService:
     ) -> SensorDataRecordedResponse:
         from app.services import websocket_service
 
-        if not await sensor_device_crud.get(db=db, id=obj_in.sensor_device_id):
+        sensor_device = await sensor_device_crud.get_entity(
+            db=db, id=obj_in.sensor_device_id
+        )
+        if sensor_device is None or not sensor_device.is_active:
             return SensorDataRecordedResponse(
                 timestamp=datetime.now(timezone.utc),
                 status="Error: Sensor device not found",
             )
 
-        sensor_config = await cache_service.get_sensor_config(db=db)
+        # A deactivated site stops accepting readings even while its devices
+        # are still individually marked active.
+        site = await location_crud.get(db=db, id=sensor_device.location_id)
+        if site is None or not site.is_active:
+            return SensorDataRecordedResponse(
+                timestamp=datetime.now(timezone.utc),
+                status="Error: Sensor device site is inactive",
+            )
+
+        sensor_config = await cache_service.get_sensor_config(
+            db=db, sensor_device_id=obj_in.sensor_device_id
+        )
         computed_water_level_cm = (
             sensor_config.installation_height - obj_in.raw_distance_cm
         )
@@ -129,9 +143,9 @@ class SensorReadingService:
             message="Retrieved successfully",
             sensor_reading=calculated_summary,
         )
-        location_id = await cache_service.get_location_id_per_sensor_device(
-            db=db, sensor_device_id=db_reading.sensor_device_id
-        )
+        # The device row is authoritative — the reverse cache only maps each
+        # site's default sensor, so a second sensor on a site would raise.
+        location_id = sensor_device.location_id
         await websocket_service.broadcast_update(
             update_type="sensor_update",
             data=response.model_dump(mode="json"),
@@ -158,13 +172,17 @@ class SensorReadingService:
         self, db: AsyncSession, reading: SensorReading
     ) -> SensorReadingSummary:
         prev_reading = await sensor_reading_crud.get_previous_reading(
-            db=db, before_timestamp=reading.timestamp
+            db=db,
+            before_timestamp=reading.timestamp,
+            sensor_device_id=reading.sensor_device_id,
         )
         water_level_summary = self._calculate_water_level_summary(
             current_cm=reading.water_level_cm, prev_reading=prev_reading
         )
         alert_summary = await self._calculate_alert_summary(
-            current_cm=reading.water_level_cm, db=db
+            current_cm=reading.water_level_cm,
+            db=db,
+            sensor_device_id=reading.sensor_device_id,
         )
         return SensorReadingSummary(
             timestamp=reading.timestamp,
@@ -192,9 +210,11 @@ class SensorReadingService:
         )
 
     async def _calculate_alert_summary(
-        self, current_cm: float, db: AsyncSession
+        self, current_cm: float, db: AsyncSession, sensor_device_id: int
     ) -> AlertSummary:
-        sensor_config = await cache_service.get_sensor_config(db=db)
+        sensor_config = await cache_service.get_sensor_config(
+            db=db, sensor_device_id=sensor_device_id
+        )
         current_cm = float(current_cm)
         warn = float(sensor_config.warning_threshold)
         crit = float(sensor_config.critical_threshold)

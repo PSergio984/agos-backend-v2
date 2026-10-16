@@ -16,6 +16,15 @@ def make_center(*, status: EvacuationCenterStatus = EvacuationCenterStatus.OPEN)
         latitude=14.706,
         longitude=120.965,
         status=status,
+        location_id=1,
+    )
+
+
+def patch_active_site(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        public.location_crud,
+        "get",
+        AsyncMock(return_value=SimpleNamespace(id=1, is_active=True)),
     )
 
 
@@ -37,6 +46,7 @@ async def test_public_evacuation_route_returns_server_generated_route(
         )
     )
     monkeypatch.setattr(public.evacuation_center_crud, "get", get_center)
+    patch_active_site(monkeypatch)
     monkeypatch.setattr(
         public.evacuation_route_service,
         "get_walking_route",
@@ -97,6 +107,7 @@ async def test_public_evacuation_route_rejects_closed_center(
         "get",
         AsyncMock(return_value=make_center(status=EvacuationCenterStatus.CLOSED)),
     )
+    patch_active_site(monkeypatch)
 
     response = await async_client.post(
         "/api/v1/public/evacuation-route",

@@ -72,3 +72,4 @@ dummy_images/
 !app/storage/hls_output/.gitkeep
 !app/storage/captured_frames/.gitkeep
 graphify-out/
+.cache/

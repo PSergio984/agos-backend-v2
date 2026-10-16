@@ -51,7 +51,8 @@ class Responder(Base):
     first_name = Column(String(50), nullable=False)
     last_name = Column(String(50), nullable=False)
     status = Column(Enum(ResponderStatus), nullable=False, default=ResponderStatus.PENDING)
-    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False, server_default="1")
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    active_location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
     activated_at = Column(DateTime(timezone=True), nullable=True)
     notif_preferences = Column(
         NotificationPreferenceType,
@@ -63,7 +64,9 @@ class Responder(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("admin_users.id"), nullable=False)
 
     admin_user = relationship("AdminUser", back_populates="responders_created")
-    location = relationship("Location", back_populates="responders")
+    location = relationship("Location", back_populates="responders", foreign_keys=[location_id])
+    active_location = relationship("Location", foreign_keys=[active_location_id])
+    deployments = relationship("ResponderDeployment", back_populates="responder", cascade="all, delete-orphan")
     groups = relationship("Group", secondary=responder_groups, back_populates="responders", passive_deletes=True)
     otp_verification = relationship("RespondersOTPVerification", back_populates="responder", uselist=False)
     acknowledgements = relationship("Acknowledgement", back_populates="responder", cascade="all, delete-orphan")

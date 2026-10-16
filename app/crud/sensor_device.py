@@ -8,11 +8,41 @@ from sqlalchemy.orm import joinedload
 
 class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
 
+    async def get_all(self, db: AsyncSession, location_id: int | None = None) -> list[SensorDevice]:
+
+        query = select(self.model)
+        if location_id is not None:
+            query = query.filter(self.model.location_id == location_id)
+        result = await db.execute(query)
+        return result.scalars().all()
+
+
+    async def get_entity(self, db: AsyncSession, id: int) -> SensorDevice | None:
+        """ORM row — `get` above returns the SensorDeviceResponse schema."""
+
+        result = await db.execute(
+            select(self.model).filter(self.model.id == id)
+        )
+        return result.scalars().first()
+
+
+    async def get_by_name_and_location(self, db: AsyncSession, device_name: str, location_id: int) -> SensorDevice | None:
+
+        result = await db.execute(
+            select(self.model)
+            .filter(self.model.device_name == device_name)
+            .filter(self.model.location_id == location_id)
+        )
+        return result.scalars().first()
+
+
     async def get_default_sensor_by_location(self, db: AsyncSession, location_id: int) -> SensorDevice | None:
 
         result = await db.execute(
             select(self.model.id, self.model.device_name)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return result.mappings().first()
@@ -58,9 +88,12 @@ class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
 
     async def get_device_config_by_location(self, db: AsyncSession, location_id: int) -> SensorConfig | None:
 
+        # Deterministic pick: oldest ACTIVE device on the site.
         sensor_device = await db.execute(
             select(self.model.sensor_config)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return sensor_device.scalars().first()
@@ -71,6 +104,8 @@ class CRUDSensorDevice(CRUDBase[SensorDevice, None, None]):
         result = await db.execute(
             select(self.model.id)
             .filter(self.model.location_id == location_id)
+            .filter(self.model.is_active.is_(True))
+            .order_by(self.model.id)
             .limit(1)
         )
         return result.scalars().first()

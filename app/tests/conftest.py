@@ -32,3 +32,70 @@ def db() -> Generator:
 async def async_client(db) -> AsyncGenerator:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as ac:
         yield ac
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-contract seam (shared by test_locations/test_device_registry/
+# test_deployments): TestClient WITHOUT context manager (lifespan opens a real
+# DB), get_db overridden with a MagicMock, auth deps overridden per role.
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock  # noqa: E402
+
+import uuid  # noqa: E402
+
+from app.api.v1.dependencies import (  # noqa: E402
+    CurrentResponder,
+    CurrentUser,
+    optional_auth,
+    require_auth,
+    require_iot_api_key,
+    require_responder_auth,
+)
+from app.core.database import get_db  # noqa: E402
+
+
+async def _fake_db():
+    yield MagicMock()
+
+
+@pytest.fixture()
+def admin_client():
+    app.dependency_overrides[require_auth] = lambda: CurrentUser(
+        id=str(uuid.uuid4()), is_superuser=True, is_enabled=True,
+        force_password_change=False,
+    )
+    # Routes that gate a privileged flag behind optional auth (locations
+    # include_inactive) should see this client as an admin too.
+    app.dependency_overrides[optional_auth] = lambda: CurrentUser(
+        id=str(uuid.uuid4()), is_superuser=True, is_enabled=True,
+        force_password_change=False,
+    )
+    app.dependency_overrides[get_db] = _fake_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def responder_client():
+    app.dependency_overrides[require_responder_auth] = lambda: CurrentResponder(
+        id=str(uuid.uuid4())
+    )
+    app.dependency_overrides[get_db] = _fake_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def anon_client():
+    app.dependency_overrides[get_db] = _fake_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def iot_client():
+    app.dependency_overrides[get_db] = _fake_db
+    app.dependency_overrides[require_iot_api_key] = lambda: None
+    yield TestClient(app)
+    app.dependency_overrides.clear()

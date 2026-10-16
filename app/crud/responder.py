@@ -1,6 +1,6 @@
 from app.crud.base import CRUDBase
 from fastapi import HTTPException
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from app.models import Responder
 from app.models.responder_related.push_subscription import PushSubscription
@@ -23,13 +23,44 @@ class CRUDResponder(CRUDBase[None, None, None]):
         return result.scalars().unique().all()
 
 
-    async def get_responder_ids_with_push_subscription(self, db: AsyncSession) -> set[UUID]:
+    async def get_responder_ids_with_push_subscription(self, db: AsyncSession, location_id: int | None = None) -> set[UUID]:
 
-        """Returns responder IDs that have at least one push subscription. Lightweight query, no relationship load."""
-        result = await db.execute(
-            select(PushSubscription.responder_id).distinct()
-        )
+        """Returns responder IDs that have at least one push subscription. Lightweight query, no relationship load.
+        When location_id is given, only responders whose effective site matches are returned."""
+        stmt = select(PushSubscription.responder_id).distinct()
+        if location_id is not None:
+            stmt = stmt.join(
+                Responder, Responder.id == PushSubscription.responder_id
+            ).where(
+                func.coalesce(Responder.active_location_id, Responder.location_id) == location_id
+            )
+        result = await db.execute(stmt)
         return {row[0] for row in result.all()}
+
+
+    async def get_ids_in_effective_location(self, db: AsyncSession, responder_ids: list[UUID], location_id: int) -> list[UUID]:
+
+        """Subset of the given responder IDs whose effective site is location_id.
+        Effective site = active_location_id when set, else home location_id."""
+        if not responder_ids:
+            return []
+        result = await db.execute(
+            select(self.model.id).where(
+                self.model.id.in_(responder_ids),
+                func.coalesce(self.model.active_location_id, self.model.location_id) == location_id,
+            )
+        )
+        return list(result.scalars().all())
+
+
+    async def clear_active_site(self, db: AsyncSession, location_id: int) -> None:
+        """Site deactivation cleanup — presence overrides pointing at the dead
+        site clear so affected responders fall back to their home site."""
+        await db.execute(
+            update(self.model)
+            .where(self.model.active_location_id == location_id)
+            .values(active_location_id=None)
+        )
 
 
     async def get_by_phone_number(self, db: AsyncSession, phone_number: str) -> Responder | None:
@@ -57,7 +88,10 @@ class CRUDResponder(CRUDBase[None, None, None]):
 
         result = await db.execute(
             select(self.model)
-            .options(joinedload(self.model.location)) # eager load
+            .options(
+                joinedload(self.model.location),
+                joinedload(self.model.active_location),
+            ) # eager load home + active site names
             .filter(self.model.id == responder_id)
             .execution_options(populate_existing=False)
         )
@@ -132,6 +166,7 @@ class CRUDResponder(CRUDBase[None, None, None]):
         first_name: str | None,
         last_name: str | None,
         phone_number: str | None,
+        location_id: int | None = None,
     ) -> Responder:
         result = await db.execute(
             select(self.model).filter(self.model.id == responder_id)
@@ -146,6 +181,10 @@ class CRUDResponder(CRUDBase[None, None, None]):
             responder.last_name = last_name
         if phone_number is not None:
             responder.phone_number = phone_number
+        if location_id is not None:
+            responder.location_id = location_id
+            # Home move makes any presence override meaningless.
+            responder.active_location_id = None
 
         try:
             await db.commit()

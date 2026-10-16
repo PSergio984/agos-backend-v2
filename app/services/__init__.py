@@ -9,6 +9,7 @@ from .admin_audit_log_service import admin_audit_log_service
 from .daily_summary import daily_summary_service
 from .responder import responder_service
 from .responder import responder_app_service
+from .responder import responder_deployment_service
 from .ml_service import ml_service
 from .system_settings_service import system_settings_service
 from .upload_service import upload_service
@@ -25,3 +26,5 @@ from .model_reading_log_service import model_reading_log_service
 from .evacuation_center_service import evacuation_center_service
 from .evacuation_service import evacuation_service
 from .evacuation_route_service import evacuation_route_service
+from .location_service import location_service
+from .camera_device_service import camera_device_service

@@ -1,7 +1,10 @@
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
+from app.api.v1.dependencies import CurrentResponder, CurrentUser
+from app.crud import admin_audit_log_crud, location_crud
 from app.crud import notification_delivery_crud
 from app.crud import notification_dispatch_crud
+from app.crud import responder_deployment_crud
 from app.crud import responder_otp_verification_crud
 from app.crud.responder_group import responder_group_crud
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +25,7 @@ from app.schemas import ResponderOTPVerifyResponse, AlertListItem, AlertPaginate
 from app.models.notification_template import NotificationType
 from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, ClaimResponse
+from app.schemas import ResponderActiveSiteResponse, AdminAuditLogCreate, ResponderDeploymentItem
 from app.models.responder_related.responders import ResponderStatus
 from app.services.websocket_service import websocket_service
 
@@ -53,6 +57,11 @@ class ResponderAppService:
         if not responder:
             raise HTTPException(status_code=404, detail="Responder not found.")
         
+        # The presence picker needs the responder's eligible sites — the open
+        # deployment(s), one at most by the partial index.
+        deployments = await responder_deployment_crud.list_for_responder(
+            db=db, responder_id=responder_id
+        )
         return ResponderDetails(
             id=str(responder.id),
             first_name=responder.first_name,
@@ -61,6 +70,21 @@ class ResponderAppService:
             phone_number=responder.phone_number,
             location_id=responder.location_id,
             location_name=responder.location.name,
+            active_location_id=responder.active_location_id,
+            active_location_name=responder.active_location.name if responder.active_location else None,
+            deployments=[
+                ResponderDeploymentItem(
+                    id=d.id,
+                    location_id=d.location_id,
+                    location_name=d.location.name,
+                    starts_at=d.starts_at,
+                    ends_at=d.ends_at,
+                    planned_ends_at=d.planned_ends_at,
+                    created_by=d.created_by,
+                )
+                for d in deployments
+                if d.ends_at is None
+            ],
             created_at=responder.created_at,
             activated_at=responder.activated_at
         )
@@ -83,9 +107,15 @@ class ResponderAppService:
 
 
     async def get_unread_alerts_count(self, responder_id: UUID, db: AsyncSession) -> int:
+        # Same site scope as the feed — a badge that counts hidden alerts lies.
+        responder = await responder_crud.get(db=db, id=responder_id)
+        effective_site = (
+            responder.active_location_id or responder.location_id if responder else None
+        )
         return await notification_delivery_crud.get_unread_alerts_count(
             responder_id=responder_id,
             db=db,
+            effective_location_id=effective_site,
         )
 
 
@@ -97,12 +127,18 @@ class ResponderAppService:
         page_size: int = 20,
         notification_type: NotificationType | None = None,
     ) -> AlertPaginatedResponse:
+        # Presence-scoped feed: current site + site-less announcements only.
+        responder = await responder_crud.get(db=db, id=responder_id)
+        effective_site = (
+            responder.active_location_id or responder.location_id if responder else None
+        )
         deliveries, has_more = await notification_delivery_crud.get_alerts_per_responder(
             responder_id=responder_id,
             db=db,
             page=page,
             page_size=page_size,
             notification_type=notification_type,
+            effective_location_id=effective_site,
         )
 
         return AlertPaginatedResponse(
@@ -113,10 +149,11 @@ class ResponderAppService:
                     type=delivery.dispatch.type,
                     title=delivery.dispatch.title,
                     message=delivery.dispatch.message,
-                    timestamp=delivery.sent_at,
+                    timestamp=delivery.sent_at or delivery.created_at,
                     is_acknowledged=delivery.acknowledgement is not None,
                     acknowledged_at=delivery.acknowledgement.acknowledged_at if delivery.acknowledgement else None,
                     acknowledge_message=delivery.acknowledgement.message if delivery.acknowledgement else None,
+                    location_id=delivery.dispatch.location_id,
                     claimed_by=delivery.dispatch.claimed_by,
                     claimed_by_name=(
                         f"{delivery.dispatch.claimed_by_responder.first_name} "
@@ -160,7 +197,7 @@ class ResponderAppService:
     async def claim_alert(
         self,
         dispatch_id: int,
-        current_responder: Responder,
+        current_responder: CurrentResponder,
         db: AsyncSession,
     ) -> ClaimResponse:
         """"On it" claim — marks the shared dispatch as taken by this responder
@@ -173,6 +210,16 @@ class ResponderAppService:
             db=db, dispatch_id=dispatch_id, responder_id=current_responder.id
         )
         if dispatch is None or delivery is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+        responder: Responder = await responder_crud.get(db=db, id=current_responder.id)
+        if responder is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+        # The claim follows the feed's scoping: a dispatch for another site is
+        # not claimable even though the delivery still exists (e.g. the
+        # responder switched sites after the alert went out). NULL-site
+        # announcements stay claimable — they reached every site.
+        effective_site = responder.active_location_id or responder.location_id
+        if dispatch.location_id is not None and dispatch.location_id != effective_site:
             raise HTTPException(status_code=404, detail="Alert not found.")
         if dispatch.type != NotificationType.BLOCKAGE:
             raise HTTPException(
@@ -189,28 +236,127 @@ class ResponderAppService:
                 status_code=409, detail="This alert has already been handled."
             )
 
-        responder: Responder = await responder_crud.get(db=db, id=current_responder.id)
         dispatch.claimed_by = responder.id
         dispatch.claimed_at = datetime.now(timezone.utc)
         await db.commit()
 
         claimer_name = f"{responder.first_name} {responder.last_name}"
-        await websocket_service.broadcast_update(
-            "alert_claimed",
-            {
-                "dispatch_id": dispatch.id,
-                "claimed_by": str(responder.id),
-                "claimed_by_name": claimer_name,
-                "claimed_at": dispatch.claimed_at.isoformat(),
-            },
-            location_id=responder.location_id,
-        )
+        claim_data = {
+            "dispatch_id": dispatch.id,
+            "claimed_by": str(responder.id),
+            "claimed_by_name": claimer_name,
+            "claimed_at": dispatch.claimed_at.isoformat(),
+        }
+        # The claim broadcast follows the dispatch's site — that's the channel
+        # the alert went out on. A NULL-site dispatch is an announcement every
+        # site received, so every site's channel gets the claim too.
+        if dispatch.location_id is None:
+            location_ids = await location_crud.get_all_ids(db=db)
+        else:
+            location_ids = [dispatch.location_id]
+        for location_id in location_ids:
+            await websocket_service.broadcast_update(
+                "alert_claimed", claim_data, location_id=location_id
+            )
 
         return ClaimResponse(
             dispatch_id=dispatch.id,
             claimed_by=responder.id,
             claimed_by_name=claimer_name,
             claimed_at=dispatch.claimed_at,
+        )
+
+
+    async def set_active_site(
+        self, responder_id: UUID, location_id: int, db: AsyncSession,
+        current_user: CurrentUser | None = None,
+    ) -> ResponderActiveSiteResponse:
+        """Presence: the responder marks which site they're on. Valid choices
+        are their home site or the site of their open deployment — anything
+        else means they're not a member there."""
+        # Lock the responder row so a concurrent deployment close can't race
+        # this write (the close path clears active_location_id under the lock).
+        responder: Responder = await responder_crud.get_with_lock(db=db, id=responder_id)
+        if not responder:
+            raise HTTPException(status_code=404, detail="Responder not found.")
+
+        if location_id != responder.location_id:
+            open_deployment = await responder_deployment_crud.get_open_for_responder(
+                db=db, responder_id=responder.id
+            )
+            # A deployment open-ended but scheduled for the future isn't a
+            # valid presence target yet — "open" means started and unclosed.
+            if (
+                open_deployment is None
+                or open_deployment.location_id != location_id
+                or open_deployment.starts_at > datetime.now(timezone.utc)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Responder is not deployed to that site.",
+                )
+
+        # Presence on a deactivated site is meaningless — applies to the home
+        # site too, since a site can be deactivated while it's someone's home.
+        target = await location_crud.get(db=db, id=location_id)
+        if target is None or not target.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="That site is not active.",
+            )
+
+        responder.active_location_id = location_id
+        db.add(responder)
+        if current_user is not None:
+            await admin_audit_log_crud.create_only_no_commit(
+                db=db,
+                obj_in=AdminAuditLogCreate(
+                    admin_user_id=current_user.id,
+                    action=(
+                        f"Set active site to '{target.name}' for responder "
+                        f"'{responder.first_name} {responder.last_name}'"
+                    ),
+                ),
+            )
+        await db.commit()
+
+        return ResponderActiveSiteResponse(
+            location_id=responder.location_id,
+            active_location_id=responder.active_location_id,
+        )
+
+    async def admin_set_active_site(
+        self, responder_id: UUID, location_id: int | None, db: AsyncSession,
+        current_user: CurrentUser | None = None,
+    ) -> ResponderActiveSiteResponse:
+        """Admin override of presence: NULL clears (falls back to home site);
+        a concrete site must still be one the responder is eligible for —
+        admins override *selection*, not membership."""
+        if location_id is None:
+            responder: Responder = await responder_crud.get_with_lock(db=db, id=responder_id)
+            if not responder:
+                raise HTTPException(status_code=404, detail="Responder not found.")
+            responder.active_location_id = None
+            db.add(responder)
+            if current_user is not None:
+                await admin_audit_log_crud.create_only_no_commit(
+                    db=db,
+                    obj_in=AdminAuditLogCreate(
+                        admin_user_id=current_user.id,
+                        action=(
+                            f"Cleared active site for responder "
+                            f"'{responder.first_name} {responder.last_name}'"
+                        ),
+                    ),
+                )
+            await db.commit()
+            return ResponderActiveSiteResponse(
+                location_id=responder.location_id,
+                active_location_id=None,
+            )
+        return await self.set_active_site(
+            responder_id=responder_id, location_id=location_id, db=db,
+            current_user=current_user,
         )
 
 
@@ -237,6 +383,16 @@ class ResponderAppService:
 
 
     async def send_otp(self, responder: Responder, db: AsyncSession) -> str | None:
+
+        # A PENDING responder on a deactivated home site can never activate —
+        # don't burn an SMS on a verification verify_otp would reject anyway.
+        if responder.status == ResponderStatus.PENDING:
+            home_site = await location_crud.get(db=db, id=responder.location_id)
+            if home_site is None or not home_site.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Responder's home site is inactive — reassign before activating.",
+                )
 
         # Generate OTP
         otp = "".join(secrets.choice("0123456789") for _ in range(settings.OTP_LENGTH))
@@ -269,9 +425,6 @@ class ResponderAppService:
 
 
     async def verify_otp(self, verify_request: ResponderOTPVerifyRequest, db: AsyncSession):
-        # Get active group first (this may commit internally, so do it before transaction)
-        active_group = await responder_group_crud.ensure_exists(db=db, name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME)
-        
         record = await responder_otp_verification_crud.get_by_responder_id(
             db=db, 
             responder_id=verify_request.responder_id
@@ -313,6 +466,21 @@ class ResponderAppService:
         # Success - activate and add to group only if still pending (active responders re-logging in skip this)
         responder = await responder_crud.get(db=db, id=verify_request.responder_id)
         if responder.status == ResponderStatus.PENDING:
+            # Activating into a deactivated home site strands the responder.
+            home_site = await location_crud.get(db=db, id=responder.location_id)
+            if home_site is None or not home_site.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Responder's home site is inactive — reassign before activating.",
+                )
+            # Join the site's own "All Active Responders" group (home site, not
+            # the legacy NULL group). ensure_exists may commit internally, so it
+            # runs before the staged writes below.
+            active_group = await responder_group_crud.ensure_exists(
+                db=db,
+                name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
+                location_id=responder.location_id,
+            )
             await responder_crud.activate(db=db, responder_id=verify_request.responder_id, commit=False)
             await responder_group_crud.add_member(db=db, group_id=active_group.id, responder_id=verify_request.responder_id, commit=False)
         await responder_otp_verification_crud.delete_by_responder_id(db=db, responder_id=verify_request.responder_id)

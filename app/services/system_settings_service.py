@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud import system_settings_crud
 from app.crud import admin_audit_log_crud
 from app.schemas import AdminAuditLogCreate
+from app.services.cache_service import cache_service
 
 class SystemSettingsService:
 
@@ -19,6 +20,10 @@ class SystemSettingsService:
         old_value = settings.json_value
         
         updated_settings = await system_settings_crud.update(db=db, db_obj=settings, obj_in=value)
+        if key == "alert_thresholds":
+            # Fusion scoring and daily summaries read this cache — a settings
+            # write must take effect now, not after a restart.
+            cache_service.invalidate_alert_thresholds()
 
         # Log the update action with descriptive message
         audit_message = self._format_audit_message(key, old_value, updated_settings.json_value)

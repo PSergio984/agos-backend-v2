@@ -2,7 +2,8 @@ from .admin_user import AdminUserResponse, AdminUserCreate
 from .token import Token, TokenData, RefreshTokenRequest
 from .admin_audit_log import AdminAuditLogCreate, AdminAuditLogResponse
 from .system_settings import SystemSettingsCreate, SystemSettingsResponse, SystemSettingsUpdate, AlertThresholdsResponse
-from .sensor_devices import SensorDeviceResponse, SensorDeviceStatusResponse
+from .sensor_devices import SensorDeviceResponse, SensorDeviceStatusResponse, SensorDeviceCreate, SensorDeviceUpdate, SensorDeviceItem
+from .camera_devices import CameraDeviceCreate, CameraDeviceUpdate, CameraDeviceItem
 from .sensor_reading import SensorReadingCreate, SensorReadingResponse, SensorReadingForExport, SensorReadingPaginatedResponse, SensorDataRecordedResponse, SensorReadingMinimalResponse, SensorReadingForExportResponse, SensorReadingTrendResponse
 from .model_readings import ModelReadingCreate
 from .admin_audit_log import AdminAuditLogPaginatedResponse
@@ -15,6 +16,7 @@ from .responder import ResponderListItem, ResponderDetailsResponse, ResponderSen
 from .responder import AcknowledgeNotifRequest, AcknowledgeNotifResponse
 from .responder import ClaimRequest, ClaimResponse
 from .responder import ResponderAdminUpdate, ResponderSelfUpdate
+from .responder import ResponderActiveSiteResponse, ResponderActiveSiteUpdate, ResponderAdminActiveSiteUpdate, ResponderDeploymentCreate, ResponderDeploymentItem, ResponderDeploymentsResponse
 
 from .reading_summary_response import SensorWebSocketResponse, SensorReadingSummary, WaterLevelSummary, AlertSummary
 from .reading_summary_response import ModelWebSocketResponse
@@ -45,7 +47,7 @@ from .evacuation import (
     EvacuationEventResponse,
 )
 
-from .location import LocationCoordinate, DevicePerLocation
+from .location import LocationCoordinate, DevicePerLocation, LocationCreate, LocationUpdate, LocationResponse
 from .core import LocationDetails, DeviceDetails, PublicStatusResponse
 
 from .upload import UploadResponse

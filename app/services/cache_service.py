@@ -12,11 +12,9 @@ class CacheService:
     def __init__(self):
         self._device_ids_cache: Optional[dict[int, DevicePerLocation]] = None  # cached device IDs per location
 
-        self._location_id_per_sensor_device_cache: Optional[dict[int, int]] = None # cached location id per sensor device id
-
         self._location_coordinates_cache: Optional[list[LocationCoordinate]] = None  # cached location coordinates
 
-        self._sensor_config_cache: Optional[SensorConfig] = None  # cached sensor configuration
+        self._sensor_config_cache: dict[int, SensorConfig] = {}  # cached sensor configuration per sensor device
         
         self._alert_thresholds_cache: Optional[AlertThresholdsResponse] = None  # cached alert thresholds
 
@@ -30,7 +28,7 @@ class CacheService:
     # mutable cache
     async def update_sensor_config_cache(self, db: AsyncSession, sensor_device_id: int) -> None:
         sensor_config_data = await sensor_device_crud.get_device_config(db=db, sensor_device_id=sensor_device_id)
-        self._sensor_config_cache = SensorConfig.model_validate(sensor_config_data)
+        self._sensor_config_cache[sensor_device_id] = SensorConfig.model_validate(sensor_config_data)
 
 
     # unmutable cache
@@ -56,26 +54,30 @@ class CacheService:
         self._device_ids_cache = device_ids_cache
 
 
-    # unmutable cache
-    """
-        1. Gets all location IDs
-        2. For each location ID, gets the corresponding sensor device ID
-        3. Builds a dictionary mapping sensor device IDs to location IDs
-        4. Stores the dictionary in the cache attribute
-    """
-    async def update_location_id_per_sensor_device_cache(self, db: AsyncSession) -> None:
-        location_ids = await location_crud.get_all_ids(db=db)
-
-        location_id_per_sensor_device_cache = {}
-        for loc_id in location_ids:
-            sensor_device_id = await sensor_device_crud.get_id_by_location(db=db, location_id=loc_id)
-            location_id_per_sensor_device_cache[sensor_device_id] = loc_id
-        self._location_id_per_sensor_device_cache = location_id_per_sensor_device_cache
+    def invalidate_device_caches(self) -> None:
+        """Device registrations/reassignments/deactivations at runtime must
+        drop the caches so the next read rebuilds them."""
+        self._device_ids_cache = None
 
 
-    async def get_sensor_config(self, db: AsyncSession) -> SensorConfig:
+    def invalidate_alert_thresholds(self) -> None:
+        """Settings writes re-read thresholds on the next access."""
+        self._alert_thresholds_cache = None
 
-        if self._sensor_config_cache is None:
+
+    def invalidate_location_caches(self) -> None:
+        """Site create/update/deactivate at runtime must drop the caches:
+        device map (the new site needs a row), coordinate list (weather
+        fetch and summary loops iterate it)."""
+        self._device_ids_cache = None
+        self._location_coordinates_cache = None
+
+
+    async def get_sensor_config(self, db: AsyncSession, sensor_device_id: int | None = None) -> SensorConfig:
+
+        if sensor_device_id is None:
+            # Fallback for callers without a device context — resolve the first
+            # known sensor device (legacy single-site behavior).
             if self._device_ids_cache is None:
                 await self.update_device_ids_cache(db=db)
 
@@ -89,11 +91,14 @@ class CacheService:
             if device_ids is None or device_ids.sensor_device_id is None:
                 raise ValueError("No sensor device ID available to load sensor config.")
 
+            sensor_device_id = device_ids.sensor_device_id
+
+        if sensor_device_id not in self._sensor_config_cache:
             await self.update_sensor_config_cache(
-                db=db, sensor_device_id=device_ids.sensor_device_id
+                db=db, sensor_device_id=sensor_device_id
             )
 
-        return self._sensor_config_cache
+        return self._sensor_config_cache[sensor_device_id]
 
 
     async def get_all_location_coordinates(self, db: AsyncSession) -> list[LocationCoordinate]:
@@ -114,18 +119,6 @@ class CacheService:
             raise ValueError(f"Device IDs for location id {location_id} not found in cached device IDs.")
 
         return device_ids
-
-
-    async def get_location_id_per_sensor_device(self, db: AsyncSession, sensor_device_id: int) -> int:
-
-        if self._location_id_per_sensor_device_cache is None:
-            await self.update_location_id_per_sensor_device_cache(db=db)
-        
-        location_id = self._location_id_per_sensor_device_cache.get(sensor_device_id)
-        if location_id is None:
-            raise ValueError(f"Location ID for sensor device id {sensor_device_id} not found in cached location IDs.")
-
-        return location_id
 
 
     async def get_location_coordinate(self, db: AsyncSession, location_id) -> LocationCoordinate:

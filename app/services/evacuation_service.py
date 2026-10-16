@@ -13,9 +13,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
-from app.core.config import settings
 from app.core.state import fusion_state_manager
-from app.crud import evacuation_event_crud
+from app.crud import evacuation_event_crud, location_crud
 from app.models.evacuation_event import EvacuationEventKind
 from app.models.notification_template import NotificationType
 from app.schemas import (
@@ -88,6 +87,15 @@ class EvacuationService:
         from app.services import notification_service, websocket_service
 
         is_all_clear = payload.kind == "all_clear"
+
+        # An evacuation targets a real, active site — an unknown id would
+        # otherwise fail on the FK at commit; an inactive one shouldn't get
+        # citizen pushes or live alerts. Checked before the dedup guard so a
+        # rejected call never poisons the double-dispatch cache.
+        site = await location_crud.get(db=db, id=payload.location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(status_code=400, detail="Site is not active.")
+
         self._guard_double_dispatch(payload.location_id, payload.kind)
 
         if is_all_clear:

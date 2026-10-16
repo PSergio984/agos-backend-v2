@@ -7,6 +7,7 @@ from app.schemas import ResponderDetails, NotifPreferenceUpdateRequest, AlertPag
 from app.schemas import ResponderForApproval, ResponderOTPDispatchResponse, ResponderOTPVerifyRequest, ResponderOTPVerifyResponse, ResponderSendSMSRequest, ResponderRegistrationRequest
 from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse
 from app.schemas import ClaimRequest, ClaimResponse
+from app.schemas import ResponderActiveSiteResponse, ResponderActiveSiteUpdate
 from app.models.responder_related.responders import NotificationPreference
 from app.models.notification_template import NotificationType
 from app.services import responder_app_service
@@ -118,6 +119,20 @@ async def update_responder_notif_preferences(
     )
 
 
+@router.post("/active-site", response_model=ResponderActiveSiteResponse)
+async def set_active_site(
+    payload: ResponderActiveSiteUpdate,
+    current_responder: CurrentResponder = Depends(require_responder_auth),
+    db: AsyncSession = Depends(get_db)) -> ResponderActiveSiteResponse:
+
+    # Identity comes from the token — a responder can only set their own site.
+    return await responder_app_service.set_active_site(
+        responder_id=current_responder.id,
+        location_id=payload.location_id,
+        db=db,
+    )
+
+
 # --- Pre-auth endpoints (no token required) ---
 
 @router.post("/for-approval", response_model=ResponderForApproval)
@@ -160,7 +175,10 @@ async def get_water_level_trend(
     from app.services.cache_service import cache_service
     from app.crud.sensor_reading import sensor_reading_crud
 
-    device_ids = await cache_service.get_device_ids_per_location(db, location_id)
+    try:
+        device_ids = await cache_service.get_device_ids_per_location(db, location_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Site not found.")
     if not device_ids or not device_ids.sensor_device_id:
         return []
 

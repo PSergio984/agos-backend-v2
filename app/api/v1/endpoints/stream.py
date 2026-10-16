@@ -4,13 +4,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from app.schemas import CameraFrameSnapshot, CameraStatus
 from app.services.camera_status_service import camera_status_service
+from app.services.camera_device_service import camera_device_service
 from app.services.ml_service import ml_service
 from app.core.config import settings
 from app.core.rate_limiter import limiter
 from app.core.ws_manager import ws_manager
 from app.api.v1.dependencies import require_iot_api_key
 from app.core.database import get_db
-from app.crud import camera_device_crud
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -38,19 +38,23 @@ async def get_latest_camera_frame(location_id: int = Query(...)):
 async def upload_camera_image(
     request: Request,
     location_id: int,
+    camera_device_id: int | None = None,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_iot_api_key),
 ):
     """Receive an image from the camera, broadcast it to WebSocket clients, and run ML inference."""
-    camera_device_id = await camera_device_crud.get_id_by_location(
-        db=db, location_id=location_id
+    # Camera↔site binding: the device's registered site must match the
+    # claimed location_id; the registration is authoritative downstream.
+    device = await camera_device_service.get_for_ingest(
+        db=db, camera_device_id=camera_device_id, location_id=location_id
     )
-    if camera_device_id is None:
+    if device is None:
         raise HTTPException(
-            status_code=403,
-            detail="Device is not authorized for this location_id",
+            status_code=400,
+            detail="Camera device is not registered for this location_id",
         )
+    location_id = device.location_id
 
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
@@ -76,7 +80,7 @@ async def upload_camera_image(
 
     await ml_service.process_frame_bytes(
         image_bytes=image_bytes,
-        camera_device_id=camera_device_id,
+        camera_device_id=device.id,
         location_id=location_id,
     )
 

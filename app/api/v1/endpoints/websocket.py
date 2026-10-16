@@ -6,6 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from app.core.ws_manager import ws_manager
 from app.services.websocket_service import websocket_service
 from app.services.ml_service import ml_service
+from app.services.camera_device_service import camera_device_service
 from app.services.camera_status_service import camera_status_service
 from app.core.database import AsyncSessionLocal
 
@@ -14,12 +15,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _resolve_responder_location_id(websocket: WebSocket, token: str) -> int | None:
+    """Decode a responder JWT and return their effective site id, or close the
+    socket (1008) and return None on any failure."""
+    from jose import jwt, JWTError
+    from app.core.config import settings
+    from app.crud import responder_crud
+    from app.models.responder_related.responders import ResponderStatus
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        responder_id = payload.get("sub")
+        if not responder_id or payload.get("type") != "responder":
+            raise JWTError("not a responder token")
+    except JWTError:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token"
+        )
+        return None
+
+    async with AsyncSessionLocal() as db:
+        responder = await responder_crud.get(db=db, id=responder_id)
+    if responder is None or responder.status != ResponderStatus.ACTIVE:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Responder not active"
+        )
+        return None
+
+    return responder.active_location_id or responder.location_id
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
 
     location_id = websocket.query_params.get("location_id")
+    token = websocket.query_params.get("token")
 
     await websocket.accept()
+
+    # Presence-derived channel: a responder token pins the subscription to
+    # their effective site (active ?? home), overriding whatever the client
+    # asked for. No token → legacy client-chosen channel (PWA/admin viewers).
+    if token:
+        location_id = await _resolve_responder_location_id(websocket=websocket, token=token)
+        if location_id is None:
+            return  # socket already closed
 
     if not location_id:
         await websocket.close(
@@ -33,6 +73,17 @@ async def websocket_endpoint(websocket: WebSocket):
     except ValueError:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION, reason="Invalid location_id"
+        )
+        return
+
+    # Reject unknown/inactive sites up front — send_initial_data would
+    # otherwise die silently inside the generic except after accept.
+    from app.crud import location_crud
+    async with AsyncSessionLocal() as db:
+        site = await location_crud.get(db=db, id=location_id)
+    if site is None or not site.is_active:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="Site is not active"
         )
         return
 
@@ -62,21 +113,23 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @router.websocket("/ws/rpi")
 async def rpi_websocket_endpoint(websocket: WebSocket):
-    camera_device_id = websocket.query_params.get("camera_device_id")
-    location_id = websocket.query_params.get("location_id")
+    camera_device_id_raw = websocket.query_params.get("camera_device_id")
+    location_id_raw = websocket.query_params.get("location_id")
 
     await websocket.accept()
 
-    if not camera_device_id or not location_id:
+    if not location_id_raw:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
-            reason="Missing camera_device_id or location_id",
+            reason="Missing location_id",
         )
         return
 
     try:
-        camera_device_id = int(camera_device_id)
-        location_id = int(location_id)
+        # camera_device_id stays optional: legacy firmware identifies by
+        # location_id only and the service resolves the site's default camera.
+        camera_device_id = int(camera_device_id_raw) if camera_device_id_raw else None
+        location_id = int(location_id_raw)
     except ValueError:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
@@ -84,6 +137,20 @@ async def rpi_websocket_endpoint(websocket: WebSocket):
         )
         return
 
+    # Camera↔site binding: the device's registered site must match the
+    # claimed location_id (unknown/inactive device → same rejection).
+    async with AsyncSessionLocal() as db:
+        bound_device = await camera_device_service.get_for_ingest(
+            db=db, camera_device_id=camera_device_id, location_id=location_id
+        )
+    if bound_device is None:
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Camera device is not registered for this location",
+        )
+        return
+
+    camera_device_id = bound_device.id
     await websocket.send_json(
         {
             "type": "connected",

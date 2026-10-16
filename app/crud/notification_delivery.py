@@ -46,6 +46,7 @@ class CRUDNotificationDelivery(CRUDBase):
         page: int = 1,
         page_size: int = 20,
         notification_type: NotificationType | None = None,
+        effective_location_id: int | None = None,
     ) -> tuple[list[NotificationDelivery], bool]:
         from app.models.notification_dispatch import NotificationDispatch
 
@@ -60,10 +61,24 @@ class CRUDNotificationDelivery(CRUDBase):
             .where(NotificationDelivery.responder_id == responder_id)
         )
 
+        if notification_type is not None or effective_location_id is not None:
+            stmt = stmt.join(NotificationDispatch)
         if notification_type is not None:
-            stmt = stmt.join(NotificationDispatch).where(NotificationDispatch.type == notification_type)
+            stmt = stmt.where(NotificationDispatch.type == notification_type)
+        if effective_location_id is not None:
+            # Presence-scoped feed: the responder sees alerts for their current
+            # site plus site-less announcements (NULL reaches every site).
+            stmt = stmt.where(
+                (NotificationDispatch.location_id == effective_location_id)
+                | NotificationDispatch.location_id.is_(None)
+            )
 
-        stmt = stmt.order_by(NotificationDelivery.sent_at.desc())
+        # FAILED deliveries have sent_at=None; coalesce to created_at so they
+        # don't sort first (Postgres NULLS FIRST) or crash the response schema.
+        stmt = stmt.order_by(
+            func.coalesce(NotificationDelivery.sent_at, NotificationDelivery.created_at).desc(),
+            NotificationDelivery.created_at.desc(),
+        )
 
         offset = (page - 1) * page_size
         stmt = stmt.offset(offset).limit(page_size + 1)
@@ -107,9 +122,15 @@ class CRUDNotificationDelivery(CRUDBase):
         result = await db.execute(stmt)
         return int(result.scalar_one()) > 0
 
-    async def get_unread_alerts_count(self, responder_id: UUID, db: AsyncSession) -> int:
+    async def get_unread_alerts_count(
+        self,
+        responder_id: UUID,
+        db: AsyncSession,
+        effective_location_id: int | None = None,
+    ) -> int:
+        from app.models.notification_dispatch import NotificationDispatch
 
-        result = await db.execute(
+        stmt = (
             select(func.count(NotificationDelivery.id))
             .outerjoin(
                 Acknowledgement,
@@ -121,6 +142,12 @@ class CRUDNotificationDelivery(CRUDBase):
                 Acknowledgement.id.is_(None),
             )
         )
+        if effective_location_id is not None:
+            stmt = stmt.join(NotificationDispatch).where(
+                (NotificationDispatch.location_id == effective_location_id)
+                | NotificationDispatch.location_id.is_(None)
+            )
+        result = await db.execute(stmt)
         return int(result.scalar_one())
 
 

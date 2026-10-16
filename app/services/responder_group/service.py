@@ -36,15 +36,16 @@ def _build_group_update_audit_action(
 
 class ResponderGroupService:
     async def get_all_groups(self, db: AsyncSession) -> list[ResponderGroupItem]:
-        await responder_group_crud.ensure_exists(
-            db=db,
-            name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
-        )
+        # No NULL-site ensure_exists here — the multi-site migration backfills
+        # the legacy "All Active Responders" group onto site 1, and per-site
+        # groups are created on responder activation / site creation. A fresh
+        # NULL-site group would never gain members and can't be deleted.
         groups = await responder_group_crud.get_all_with_member_ids(db=db)
         return [
             ResponderGroupItem(
                 id=group.id,
                 group_name=group.name,
+                location_id=group.location_id,
                 member_ids=[responder.id for responder in group.responders],
             )
             for group in groups
@@ -57,7 +58,11 @@ class ResponderGroupService:
         dedup_member_ids = list(dict.fromkeys(group.member_ids))
 
         try:
-            if await responder_group_crud.name_exists(db=db, name=normalized_name):
+            # Names are unique per site — admin-created groups are NULL-site,
+            # so the collision check runs within that same scope.
+            if await responder_group_crud.get_by_name_and_location(
+                db=db, name=normalized_name, location_id=None
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="A group with this name already exists.",
@@ -103,6 +108,7 @@ class ResponderGroupService:
         return ResponderGroupItem(
             id=created.id,
             group_name=created.name,
+            location_id=created.location_id,
             member_ids=dedup_member_ids,
         )
 
@@ -141,8 +147,9 @@ class ResponderGroupService:
                     detail="This group name is reserved for the system default active-responders group.",
                 )
 
-            existing_name_match = await responder_group_crud.get_by_name(
-                db=db, name=normalized_name
+            # Uniqueness is per site — the check runs in the group's own scope.
+            existing_name_match = await responder_group_crud.get_by_name_and_location(
+                db=db, name=normalized_name, location_id=existing_group.location_id
             )
             if existing_name_match and existing_name_match.id != group_id:
                 raise HTTPException(
@@ -202,6 +209,7 @@ class ResponderGroupService:
         return ResponderGroupItem(
             id=updated_group.id,
             group_name=updated_group.name,
+            location_id=updated_group.location_id,
             member_ids=dedup_member_ids,
         )
 

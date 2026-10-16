@@ -253,8 +253,9 @@ class FusionAnalysisState:
 
     async def _send_system_template(self, notification_type, log_label: str) -> bool:
         """Look up the system template for this notification type and dispatch it
-        to all responders with push subscriptions. Returns True on successful send,
-        False if no template is configured or no subscribers exist."""
+        to this site's responders with push subscriptions. Returns True on
+        successful send, False if no template is configured or no subscribers
+        exist at this site."""
         from app.services import notification_service
         from app.crud import responder_crud
         from app.crud import notification_template_crud
@@ -268,7 +269,9 @@ class FusionAnalysisState:
                 print(f"⚠️ No system template configured for {notification_type.value} — skipping auto-notify")
                 return False
 
-            responder_ids = await responder_crud.get_responder_ids_with_push_subscription(db=db)
+            responder_ids = await responder_crud.get_responder_ids_with_push_subscription(
+                db=db, location_id=self.location_id
+            )
             if not responder_ids:
                 return False
 
@@ -281,6 +284,7 @@ class FusionAnalysisState:
                 payload=payload,
                 db=db,
                 system_initiated=True,
+                location_id=self.location_id,
             )
             print(f"{log_label} Auto-notified {len(responder_ids)} responders (location {self.location_id})")
             return True
@@ -369,6 +373,12 @@ class StateManager:
             fusion_state = FusionAnalysisState(location_id=location_id, camera_device_id=camera_device_id, sensor_device_id=sensor_device_id)
             self._fusion_analysis_states[location_id] = fusion_state
             return fusion_state
+
+
+    def stop_fusion_analysis_state(self, location_id: int) -> None:
+        """Park a site's fusion state — deactivation stops it serving stale
+        snapshots on /public/status and /iot/risk-score."""
+        self._fusion_analysis_states.pop(location_id, None)
 
 
     async def start_all_states(self) -> None:

@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import CurrentUser
-from app.crud import admin_audit_log_crud, evacuation_center_crud
+from app.crud import admin_audit_log_crud, evacuation_center_crud, location_crud
 from app.models import EvacuationCenter
 from app.schemas import (
     AdminAuditLogCreate,
@@ -20,12 +20,24 @@ class EvacuationCenterService:
     async def get_by_location(
         self, db: AsyncSession, location_id: int
     ) -> list[EvacuationCenterResponse]:
+        site = await location_crud.get(db=db, id=location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Site not found or inactive.",
+            )
         centers = await evacuation_center_crud.get_by_location(db=db, location_id=location_id)
         return [EvacuationCenterResponse.model_validate(c) for c in centers]
 
     async def create_center(
         self, db: AsyncSession, payload: EvacuationCenterCreate, current_user: CurrentUser
     ) -> EvacuationCenterResponse:
+        site = await location_crud.get(db=db, id=payload.location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Site not found or inactive.",
+            )
         try:
             created = await evacuation_center_crud.create_and_return(db=db, obj_in=payload)
             await admin_audit_log_crud.create_only_no_commit(
