@@ -6,7 +6,7 @@ from app.core.rate_limiter import limiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud import citizen_subscription_crud, location_crud
 from app.schemas import SubscriptionSchema, CitizenSubscriptionCreate, CitizenSubscriptionDelete
-from app.schemas.subscription import SendNotificationSchema
+from app.schemas.subscription import SendAlarmSchema, SendNotificationSchema
 from app.services import push_subscription_service, notification_service
 
 router = APIRouter(
@@ -35,6 +35,26 @@ async def send_notification_to_responders(payload: SendNotificationSchema, db: A
     await notification_service.send_notification_to_subscribers(
         payload=payload,
         db=db,
+    )
+
+
+@router.post("/send-alarm", status_code=204, dependencies=[Depends(require_auth)])
+async def send_alarm(payload: SendAlarmSchema, db: AsyncSession = Depends(get_db)) -> None:
+    """Admin-triggered alarm (T8): same dispatch pipeline, ALARM tier. A NULL
+    location_id is the barangay-wide path."""
+    if payload.location_id is not None:
+        # FOR SHARE — the gated-writer pattern: an alarm to a site being
+        # deactivated serializes against update_site's deactivation commit.
+        location = await location_crud.get_for_share(db=db, id=payload.location_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        if not location.is_active:
+            raise HTTPException(status_code=400, detail="Site is not active")
+    await notification_service.send_alarm(
+        db=db,
+        location_id=payload.location_id,
+        title=payload.title,
+        message=payload.message,
     )
 
 

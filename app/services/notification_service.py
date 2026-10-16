@@ -17,7 +17,10 @@ from app.crud import (
 from app.models.notification_template import NotificationTemplate, NotificationType
 from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.models.responder_related.push_subscription import PushSubscription
-from app.schemas.subscription import SendNotificationSchema
+from app.schemas.subscription import (
+    CustomNotificationPayload,
+    SendNotificationSchema,
+)
 
 
 class PushResult:
@@ -92,6 +95,7 @@ class NotificationService:
                 subscription=subscription,
                 notif_title=notif_title,
                 notif_message=notif_message,
+                notif_type=notif_type,
             )
             current = deliveries_by_responder[subscription.responder_id]
 
@@ -139,6 +143,45 @@ class NotificationService:
         )
 
 
+    async def send_alarm(
+        self,
+        db: AsyncSession,
+        *,
+        location_id: int | None,
+        title: str,
+        message: str,
+    ) -> None:
+        """T8 — alarm tier. Same dispatch → fan-out path as any send; the
+        ALARM type on the dispatch (and the push payload) is what makes the
+        responder app render the NDRRMC-style takeover UI.
+
+        Audience = the site's responders via active presence — the same
+        resolver the fusion auto-notify path uses. location_id NULL =
+        barangay-wide. A future autonomous trigger calls this with the site
+        resolved from sensor_devices.location_id at fire time.
+        """
+        responder_ids = await responder_crud.get_responder_ids_with_push_subscription(
+            db=db, location_id=location_id
+        )
+        if not responder_ids:
+            return
+
+        payload = SendNotificationSchema(
+            responder_ids=list(responder_ids),
+            custom_notification=CustomNotificationPayload(
+                type=NotificationType.ALARM, title=title, message=message
+            ),
+        )
+        # Trusted internal send — same announcements-only bypass escalation and
+        # the fusion path use for non-announcement types.
+        await self.send_notification_to_subscribers(
+            payload=payload,
+            db=db,
+            system_initiated=True,
+            location_id=location_id,
+        )
+
+
     async def send_to_citizen_subscribers(
         self,
         db: AsyncSession,
@@ -173,6 +216,7 @@ class NotificationService:
                 subscription=subscription,
                 notif_title=title,
                 notif_message=message,
+                notif_type=notif_type,
             )
             if result == PushResult.SENT:
                 sent_count += 1
@@ -236,8 +280,8 @@ class NotificationService:
         return custom_title, custom_message, custom_notification.type
 
 
-    async def send_push(self, subscription: PushSubscription, notif_title: str, notif_message: str) -> PushResult:
-        
+    async def send_push(self, subscription: PushSubscription, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
+
         try:
             webpush(
                 subscription_info={
@@ -247,9 +291,12 @@ class NotificationService:
                         "auth": subscription.auth,
                     },
                 },
+                # "type" lets the app render tiered UI (e.g. alarm takeover)
+                # straight off the push, without a feed fetch first.
                 data=json.dumps({
                     "title": notif_title,
                     "message": notif_message,
+                    "type": notif_type.value,
                 }),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": settings.VAPID_CLAIM_EMAIL},

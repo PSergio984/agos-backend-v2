@@ -13,6 +13,9 @@ class NotificationType(enum.Enum):
     BLOCKAGE = "blockage"
     ANNOUNCEMENT = "announcement"
     MAINTENANCE = "maintenance"
+    # Alarm tier (T8): NDRRMC-style takeover in the responder app. Treated as
+    # critical-or-above by deliveries/escalation.
+    ALARM = "alarm"
 
 
 class NotificationTemplate(Base):

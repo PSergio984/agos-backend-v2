@@ -26,6 +26,10 @@ The site an admin is looking at in agos-admin — dropdown filters sensors/readi
 
 The shared alert entity (`notification_dispatches`) fanned out to responders as deliveries. Gains `location_id` (nullable; NULL = global announcement) per #3.
 
+## Alarm
+
+A severity tier on the dispatch pipeline (`NotificationType.ALARM`), rendered as an NDRRMC-style full-screen takeover in the responder app. An alarm is a dispatch carrying `location_id` (NULL = barangay-wide); fan-out is the site's responders via active presence; deliveries/escalation treat it as critical-or-above. Admin-triggered (`POST /push/send-alarm`); the autonomous sensor-threshold trigger is designed for but deferred — it resolves the site from `sensor_devices.location_id` at fire time (#21).
+
 ## Claim
 
 A responder's "On it" on a blockage dispatch — first-wins, broadcasts `alert_claimed` to the dispatch's site. Distinct from **acknowledgement** (the closing/handling log).

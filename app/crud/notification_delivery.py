@@ -173,7 +173,11 @@ class CRUDNotificationDelivery(CRUDBase):
             .where(
                 NotificationDelivery.status == DeliveryStatus.SENT,
                 Acknowledgement.id.is_(None),
-                NotificationDispatch.type == NotificationType.CRITICAL,
+                # ALARM is the critical-or-above tier: unacknowledged alarms
+                # escalate like criticals (#21/T8).
+                NotificationDispatch.type.in_(
+                    [NotificationType.CRITICAL, NotificationType.ALARM]
+                ),
                 NotificationDelivery.sent_at < cutoff,
                 NotificationDelivery.escalation_count < max_escalation,
             )
