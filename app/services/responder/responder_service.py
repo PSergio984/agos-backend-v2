@@ -4,7 +4,10 @@ from fastapi import HTTPException
 from uuid import UUID
 from app.crud.responder import responder_crud
 from app.crud.location import location_crud
+from app.crud.responder_group import responder_group_crud
+from app.models.responder_related.group import DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME
 from app.models.responder_related.push_subscription import PushSubscription
+from app.models.responder_related.responders import ResponderStatus
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,12 +99,44 @@ class ResponderService:
     ) -> ResponderListItem:
         # Phone change does not invalidate the responder JWT or push subscriptions:
         # both key off responder_id, not phone_number.
+        responder = None
+        home_move = False
         if payload.location_id is not None:
             site = await location_crud.get(db=db, id=payload.location_id)
             if site is None or not site.is_active:
                 raise HTTPException(
                     status_code=404, detail="Site not found or inactive."
                 )
+            responder = await responder_crud.get(db=db, id=responder_id)
+            if responder is None:
+                raise HTTPException(status_code=404, detail="Responder not found.")
+            home_move = payload.location_id != responder.location_id
+
+        if home_move and responder.status == ResponderStatus.ACTIVE:
+            # Default-group membership follows the home site — otherwise
+            # site-scoped sends miss them at the new site and still reach
+            # them at the old one. ensure_exists may commit its own insert;
+            # the membership rows stage flush-only and ride update_details'
+            # commit so the move and the swap land atomically.
+            new_group = await responder_group_crud.ensure_exists(
+                db=db,
+                name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
+                location_id=payload.location_id,
+            )
+            await responder_group_crud.add_member(
+                db=db, group_id=new_group.id, responder_id=responder_id, commit=False
+            )
+            old_group = await responder_group_crud.get_by_name_and_location(
+                db=db,
+                name=DEFAULT_ACTIVE_RESPONDERS_GROUP_NAME,
+                location_id=responder.location_id,
+            )
+            if old_group is not None:
+                await responder_group_crud.remove_member(
+                    db=db, group_id=old_group.id, responder_id=responder_id,
+                    commit=False,
+                )
+
         updated = await responder_crud.update_details(
             db=db,
             responder_id=responder_id,

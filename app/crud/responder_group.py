@@ -116,17 +116,35 @@ class CRUDResponderGroup(CRUDBase[Group, None, None]):
 
 
     async def add_member(
-            self, 
-            db: AsyncSession, 
-            group_id: int, 
-            responder_id: UUID, 
-            *, 
+            self,
+            db: AsyncSession,
+            group_id: int,
+            responder_id: UUID,
+            *,
             commit: bool = True) -> None:
 
         await db.execute(
             insert(responder_groups).values(
                 responder_id=responder_id,
                 group_id=group_id,
+            )
+        )
+        if commit:
+            await db.commit()
+
+
+    async def remove_member(
+            self,
+            db: AsyncSession,
+            group_id: int,
+            responder_id: UUID,
+            *,
+            commit: bool = True) -> None:
+
+        await db.execute(
+            delete(responder_groups).where(
+                responder_groups.c.group_id == group_id,
+                responder_groups.c.responder_id == responder_id,
             )
         )
         if commit:

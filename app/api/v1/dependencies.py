@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import Depends,HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,15 +96,27 @@ optional_security = HTTPBearer(auto_error=False)
 
 
 async def optional_auth(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
     db: AsyncSession = Depends(get_db)) -> CurrentUser | None:
 
-    """Admin auth that returns None instead of raising when no credentials are
-    sent — for routes that are public by default but gate privileged flags
-    (e.g. include_inactive). A malformed token still 401s."""
+    """Lazily resolve admin identity — only when a privileged flag is present.
+
+    Without `include_inactive`, credentials are ignored entirely: a responder
+    token on a plain picker call must not 401. With it, resolution runs the
+    same gates as require_auth — unknown user 401, forced password change 403.
+    """
+    if request.query_params.get("include_inactive") not in ("true", "1"):
+        return None
     if credentials is None:
         return None
-    return await _authenticate_admin(credentials=credentials, db=db)
+    user = await _authenticate_admin(credentials=credentials, db=db)
+    if user.force_password_change:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required",
+        )
+    return user
 
 
 async def require_superuser(
