@@ -1,9 +1,11 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException
 from pywebpush import webpush, WebPushException
+from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -38,11 +40,11 @@ class NotificationService:
         *,
         system_initiated: bool = False,
         location_id: int | None = None,
-    ) -> None:
+    ) -> int:
 
         responder_ids = list(dict.fromkeys(payload.responder_ids))
         if not responder_ids:
-            return
+            return 0
 
         # Site-scoped dispatch: deliver only to responders whose effective site
         # (active_location_id ?? location_id) matches. A NULL location_id is a
@@ -54,7 +56,7 @@ class NotificationService:
                 location_id=location_id,
             )
             if not responder_ids:
-                return
+                return 0
 
         notif_title, notif_message, notif_type = await self._resolve_notification_content(
             payload=payload,
@@ -142,6 +144,13 @@ class NotificationService:
             delivery_rows=list(deliveries_by_responder.values()),
         )
 
+        # Responders actually reached — a caller reporting "sent" must not
+        # count resolved-but-undelivered rows.
+        return sum(
+            1 for row in deliveries_by_responder.values()
+            if row["status"] == DeliveryStatus.SENT
+        )
+
 
     async def send_alarm(
         self,
@@ -160,9 +169,10 @@ class NotificationService:
         barangay-wide. A future autonomous trigger calls this with the site
         resolved from sensor_devices.location_id at fire time.
 
-        Returns the resolved audience count — a caller-facing signal so an
-        alarm fired at zero push-subscribed responders surfaces instead of
-        passing silently (the endpoint turns 0 into a 400).
+        Raises 400 when the resolved audience is empty — an alarm fired at
+        zero push-subscribed responders must surface instead of passing
+        silently. Returns the number of responders a push actually reached
+        (delivery rows carry the per-responder failures for the rest).
         """
         # The site gate lives here, not in the endpoint, so a future
         # autonomous trigger inherits the FOR SHARE active-site check.
@@ -175,7 +185,10 @@ class NotificationService:
             db=db, location_id=location_id
         )
         if not responder_ids:
-            return 0
+            raise HTTPException(
+                status_code=400,
+                detail="No push-subscribed responders for this site",
+            )
 
         payload = SendNotificationSchema(
             responder_ids=list(responder_ids),
@@ -185,13 +198,12 @@ class NotificationService:
         )
         # Trusted internal send — same announcements-only bypass escalation and
         # the fusion path use for non-announcement types.
-        await self.send_notification_to_subscribers(
+        return await self.send_notification_to_subscribers(
             payload=payload,
             db=db,
             system_initiated=True,
             location_id=location_id,
         )
-        return len(responder_ids)
 
 
     async def send_to_citizen_subscribers(
@@ -295,7 +307,12 @@ class NotificationService:
     async def send_push(self, subscription: PushSubscription, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
 
         try:
-            webpush(
+            # to_thread: pywebpush's send() is a sync requests.post — on the
+            # loop it stalls every concurrent request, and on the alarm path
+            # the stall happens inside the txn holding the FOR SHARE site
+            # lock. timeout=10 bounds each call.
+            await asyncio.to_thread(
+                webpush,
                 subscription_info={
                     "endpoint": subscription.endpoint,
                     "keys": {
@@ -312,8 +329,6 @@ class NotificationService:
                 }),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": settings.VAPID_CLAIM_EMAIL},
-                # Bound the sync webpush call — it runs inside the txn that
-                # holds the endpoint's FOR SHARE site lock.
                 timeout=10,
             )
             return PushResult.SENT
@@ -323,6 +338,11 @@ class NotificationService:
             )
             if status == 410: # subscription is no longer valid
                 return PushResult.GONE
+            return PushResult.FAILED
+        except RequestException:
+            # Transport failure (timeout, TLS, DNS) — pywebpush lets requests
+            # exceptions propagate unwrapped; a stale endpoint must fail its
+            # delivery row, not abort the rest of the fan-out.
             return PushResult.FAILED
 
 notification_service = NotificationService()

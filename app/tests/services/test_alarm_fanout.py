@@ -14,11 +14,14 @@ Alarm invariants under test (#21):
 - The push payload carries the tier so the app can render the takeover UI.
 """
 
+import asyncio
 import json
+import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import requests.exceptions
 from fastapi import HTTPException
 
 from app.crud import notification_delivery_crud
@@ -88,15 +91,32 @@ def test_send_alarm_service_gate_errors_propagate(admin_client):
 
 
 def test_send_alarm_zero_audience_is_400(admin_client):
-    """An alarm fired at nobody must surface — a silent 204 told the admin
-    the barangay was warned when no device heard it."""
-    with _endpoint_patch(sent=0):
+    """An alarm fired at nobody must surface — the service raises the 400,
+    the endpoint just propagates it."""
+    with _endpoint_patch(
+        side_effect=HTTPException(
+            status_code=400, detail="No push-subscribed responders for this site"
+        )
+    ):
         res = admin_client.post(
             "/api/v1/push/send-alarm",
             json={"location_id": SITE_A, "title": "t", "message": "m"},
         )
 
     assert res.status_code == 400
+
+
+def test_send_alarm_zero_delivered_is_200(admin_client):
+    """Audience resolved but every push failed → an honest sent_count of 0,
+    not a phantom count — the delivery rows carry the per-responder failures."""
+    with _endpoint_patch(sent=0):
+        res = admin_client.post(
+            "/api/v1/push/send-alarm",
+            json={"location_id": SITE_A, "title": "t", "message": "m"},
+        )
+
+    assert res.status_code == 200
+    assert res.json() == {"sent_count": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +183,9 @@ async def test_send_alarm_creates_alarm_tier_dispatch_scoped_to_site():
     # trigger inherits it.
     gate_mock.assert_awaited_once()
     assert gate_mock.call_args.kwargs["location_id"] == SITE_A
-    assert sent == 1
+    # Audience resolved to 1, but this fixture has no subscription rows —
+    # zero responders actually reached.
+    assert sent == 0
 
     # Audience resolves via active presence at the alarm site — the same
     # resolver the fusion/auto-notify path uses.
@@ -195,7 +217,8 @@ async def test_send_alarm_null_site_fans_out_barangay_wide():
 
     # NULL site: no gate call — barangay-wide needs no site check.
     gate_mock.assert_not_called()
-    assert sent == 2
+    # Same as above — resolved audience 2, zero subscriptions → 0 reached.
+    assert sent == 0
     assert (
         r_mock.get_responder_ids_with_push_subscription.call_args.kwargs["location_id"]
         is None
@@ -211,11 +234,12 @@ async def test_send_alarm_no_site_responders_creates_no_dispatch():
     crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches(set())
 
     with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock, gate:
-        sent = await notification_service.send_alarm(
-            db=AsyncMock(), location_id=SITE_B, title="t", message="m"
-        )
+        with pytest.raises(HTTPException) as exc:
+            await notification_service.send_alarm(
+                db=AsyncMock(), location_id=SITE_B, title="t", message="m"
+            )
 
-    assert sent == 0
+    assert exc.value.status_code == 400
     d_mock.create_for_send.assert_not_called()
     sub_mock.get_by_responder_ids.assert_not_called()
     del_mock.upsert_many_results.assert_not_called()
@@ -299,6 +323,54 @@ async def test_push_payload_marks_alarm_tier():
     assert data["type"] == NotificationType.ALARM.value
 
 
+async def test_send_push_transport_error_returns_failed():
+    """pywebpush lets requests transport errors propagate unwrapped — a stale
+    endpoint that hangs TLS must fail its delivery row, not abort fan-out."""
+    subscription = MagicMock(endpoint="https://push.example/x", p256dh="k", auth="a")
+
+    with patch(
+        f"{NS_MODULE}.webpush",
+        side_effect=requests.exceptions.ConnectTimeout("stale endpoint"),
+    ):
+        result = await notification_service.send_push(
+            subscription=subscription,
+            notif_title="t",
+            notif_message="m",
+            notif_type=NotificationType.ALARM,
+        )
+
+    assert result == "failed"
+
+
+async def test_send_push_does_not_block_event_loop():
+    """webpush is a sync requests.post — inside send_alarm it runs while the
+    FOR SHARE site lock is held. It must run off the event loop so other
+    requests aren't stalled behind N x up-to-10s push calls."""
+    subscription = MagicMock(endpoint="https://push.example/x", p256dh="k", auth="a")
+
+    def slow_webpush(**kwargs):
+        time.sleep(0.2)
+        return MagicMock(status_code=201)
+
+    with patch(f"{NS_MODULE}.webpush", side_effect=slow_webpush):
+        task = asyncio.create_task(
+            notification_service.send_push(
+                subscription=subscription,
+                notif_title="t",
+                notif_message="m",
+                notif_type=NotificationType.ALARM,
+            )
+        )
+        ticks = 0
+        while not task.done():
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    assert await task == "sent"
+    # ~20 ticks expected off-loop; a blocking call yields ~0-1.
+    assert ticks > 3
+
+
 # ---------------------------------------------------------------------------
 # Review-round fixes — escalation keeps the tier, audience filters apply
 # ---------------------------------------------------------------------------
@@ -371,6 +443,70 @@ async def test_fanout_resolver_excludes_inactive_and_suspended():
     assert "JOIN" in sql.upper()
     assert "status" in sql
     assert "is_active" in sql
+
+
+async def test_send_alarm_returns_delivered_count():
+    """sent_count counts responders a push actually reached — the resolver's
+    audience only bounds it."""
+    at_site = uuid.uuid4()
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({at_site})
+    subscription = MagicMock(
+        responder_id=at_site, id=uuid.uuid4(),
+        endpoint="https://push.example/x", p256dh="k", auth="a",
+    )
+
+    with (
+        crud_r, crud_d, crud_sub as sub_mock, crud_del, gate,
+        patch(f"{NS_MODULE}.webpush"),
+    ):
+        sub_mock.get_by_responder_ids.return_value = [subscription]
+        sent = await notification_service.send_alarm(
+            db=AsyncMock(), location_id=SITE_A, title="t", message="m"
+        )
+
+    assert sent == 1
+
+
+async def test_site_refilter_keeps_audience_hygiene():
+    """get_ids_in_effective_location is the send path's re-filter — escalation
+    re-sends go through it too, so it must apply the same status + active-site
+    filters as the resolver or a suspended responder keeps getting takeover
+    pings."""
+    from app.crud import responder_crud
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+
+    await responder_crud.get_ids_in_effective_location(
+        db=db, responder_ids=[uuid.uuid4()], location_id=SITE_A
+    )
+
+    sql = str(db.execute.call_args.args[0])
+    assert "JOIN" in sql.upper()
+    assert "status" in sql
+    assert "is_active" in sql
+
+
+async def test_admin_list_badge_uses_unfiltered_lookup():
+    """has_push_subscription reports a stored subscription, not current
+    reachability — the badge must not go dark just because a site was
+    deactivated."""
+    from app.services.responder.responder_service import responder_service
+
+    with patch(
+        "app.services.responder.responder_service.responder_crud",
+        **{
+            "get_all": AsyncMock(return_value=[]),
+            "get_ids_with_push_subscription": AsyncMock(return_value=set()),
+            "get_responder_ids_with_push_subscription": AsyncMock(return_value=set()),
+        },
+    ) as r_mock:
+        await responder_service.get_all_responders(db=AsyncMock())
+
+    r_mock.get_ids_with_push_subscription.assert_awaited_once()
+    r_mock.get_responder_ids_with_push_subscription.assert_not_called()
 
 
 def test_alarm_cannot_be_created_as_template():
