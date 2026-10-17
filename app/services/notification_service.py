@@ -86,6 +86,20 @@ class NotificationService:
             }
             for responder_id in responder_ids
         }
+
+        # Persist intent before any push leaves the process: a crash between
+        # send and commit must not leave a responder holding an alarm with no
+        # durable dispatch/delivery to claim or acknowledge — and rows the
+        # escalation query can't see (PR #25 review). The upsert rewrites
+        # these FAILED placeholders with real outcomes after the fan-out.
+        # This commit also ends the transaction, releasing the FOR SHARE site
+        # lock before the push loop instead of holding it across N pushes.
+        await notification_delivery_crud.upsert_many_results(
+            db=db,
+            dispatch_id=dispatch.id,
+            delivery_rows=list(deliveries_by_responder.values()),
+        )
+
         now = datetime.now(timezone.utc)
         subscriptions_to_remove: list[PushSubscription] = []
 
