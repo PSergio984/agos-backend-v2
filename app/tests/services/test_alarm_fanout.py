@@ -282,7 +282,8 @@ async def test_send_alarm_persists_intent_before_any_push_leaves():
     assert order == ["upsert", "push", "upsert"]
     assert sent == 1
     first_rows = del_mock.upsert_many_results.call_args_list[0].kwargs["delivery_rows"]
-    assert first_rows[0]["status"] == DeliveryStatus.FAILED
+    assert first_rows[0]["status"] == DeliveryStatus.PENDING
+    assert first_rows[0]["error_message"] is None
     last_rows = del_mock.upsert_many_results.call_args_list[-1].kwargs["delivery_rows"]
     assert last_rows[0]["status"] == DeliveryStatus.SENT
 
