@@ -26,8 +26,9 @@ from fastapi import HTTPException
 
 from app.crud import notification_delivery_crud
 from app.models.notification_template import NotificationType
+from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.schemas.subscription import CustomNotificationPayload, SendNotificationSchema
-from app.services.notification_service import notification_service
+from app.services.notification_service import NotificationService, notification_service
 
 SITE_A = 1
 SITE_B = 2
@@ -248,6 +249,42 @@ async def test_send_alarm_no_site_responders_creates_no_dispatch():
     d_mock.create_for_send.assert_not_called()
     sub_mock.get_by_responder_ids.assert_not_called()
     del_mock.upsert_many_results.assert_not_called()
+
+
+async def test_send_alarm_persists_intent_before_any_push_leaves():
+    """PR #25 review: send-then-commit meant a crash between push and commit
+    left a responder holding an alarm with no durable dispatch/delivery to
+    claim — and escalation couldn't see it. Dispatch + FAILED placeholder
+    rows must commit before the first send_push, then upsert real outcomes."""
+    rid = uuid.uuid4()
+    sub = MagicMock(responder_id=rid, endpoint="https://push/x", p256dh="k", auth="a")
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({rid})
+    order = []
+
+    async def record_upsert(**kwargs):
+        order.append("upsert")
+
+    async def record_push(**kwargs):
+        order.append("push")
+        return "sent"
+
+    with crud_r, crud_d, crud_sub as sub_mock, crud_del as del_mock, gate:
+        sub_mock.get_by_responder_ids.return_value = [sub]
+        del_mock.upsert_many_results.side_effect = record_upsert
+        with patch.object(
+            NotificationService, "send_push", AsyncMock(side_effect=record_push)
+        ):
+            sent = await notification_service.send_alarm(
+                db=AsyncMock(), location_id=SITE_A, title="t", message="m"
+            )
+
+    # Placeholder commit → push(es) → outcome commit.
+    assert order == ["upsert", "push", "upsert"]
+    assert sent == 1
+    first_rows = del_mock.upsert_many_results.call_args_list[0].kwargs["delivery_rows"]
+    assert first_rows[0]["status"] == DeliveryStatus.FAILED
+    last_rows = del_mock.upsert_many_results.call_args_list[-1].kwargs["delivery_rows"]
+    assert last_rows[0]["status"] == DeliveryStatus.SENT
 
 
 async def test_send_alarm_inactive_site_raises_before_resolving():
