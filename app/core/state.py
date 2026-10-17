@@ -19,6 +19,7 @@ from app.schemas import DevicePerLocation
 WARNING_NOTIFY_COOLDOWN_SECONDS = 30 * 60   # 30 minutes
 CRITICAL_NOTIFY_COOLDOWN_SECONDS = 30 * 60  # 30 minutes
 BLOCKAGE_NOTIFY_COOLDOWN_SECONDS = 4 * 60 * 60  # 4 hours — blockages persist
+NOTIFY_RETRY_SECONDS = 60  # zero-delivery sends retry soon, not every tick
 
 
 class FusionAnalysisState:
@@ -251,11 +252,13 @@ class FusionAnalysisState:
         # Fallback for states hydrated without a confidence object (e.g. initial load).
         return bool(self.blockage_status and self.blockage_status.status == "blocked")
 
-    async def _send_system_template(self, notification_type, log_label: str) -> bool:
+    async def _send_system_template(self, notification_type, log_label: str) -> bool | None:
         """Look up the system template for this notification type and dispatch it
-        to this site's responders with push subscriptions. Returns True on
-        successful send, False if no template is configured or no subscribers
-        exist at this site."""
+        to this site's responders with push subscriptions. Tri-state: True when
+        at least one push landed, None when the send ran but delivered zero
+        (dispatch + FAILED rows still written — retry on a short backoff),
+        False when nothing was sent (no template or no subscribers — retry on
+        the next tick)."""
         from app.services import notification_service
         from app.crud import responder_crud
         from app.crud import notification_template_crud
@@ -286,11 +289,13 @@ class FusionAnalysisState:
                 system_initiated=True,
                 location_id=self.location_id,
             )
-            # Arm the caller's cooldown only when a push actually landed —
-            # returning True on a zero-delivery send would silence the alert
-            # for the whole window.
             print(f"{log_label} Auto-notified {sent}/{len(responder_ids)} responders (location {self.location_id})")
-            return sent > 0
+            if sent == 0:
+                # The send still wrote a dispatch + FAILED delivery rows —
+                # during a push outage, retrying on the next fusion tick
+                # would stamp a fresh batch every reading.
+                return None
+            return True
 
 
     async def _auto_notify_critical(self) -> None:
@@ -301,9 +306,16 @@ class FusionAnalysisState:
             return
         try:
             # Arm cooldown only on successful send so a missing template doesn't
-            # silence Critical alerts for the cooldown window.
-            if await self._send_system_template(NotificationType.CRITICAL, "🚨 [CRITICAL]"):
+            # silence Critical alerts for the cooldown window. A zero-delivery
+            # send (outage) retries after the short backoff — a full dispatch
+            # batch every tick would flood the tables.
+            result = await self._send_system_template(NotificationType.CRITICAL, "🚨 [CRITICAL]")
+            if result is True:
                 self._last_critical_notify_time = now
+            elif result is None:
+                self._last_critical_notify_time = (
+                    now - CRITICAL_NOTIFY_COOLDOWN_SECONDS + NOTIFY_RETRY_SECONDS
+                )
         except Exception as e:
             print(f"⚠️ Auto-notify critical failed: {e}")
 
@@ -315,8 +327,13 @@ class FusionAnalysisState:
         if now - self._last_warning_notify_time < WARNING_NOTIFY_COOLDOWN_SECONDS:
             return
         try:
-            if await self._send_system_template(NotificationType.WARNING, "⚠️ [WARNING]"):
+            result = await self._send_system_template(NotificationType.WARNING, "⚠️ [WARNING]")
+            if result is True:
                 self._last_warning_notify_time = now
+            elif result is None:
+                self._last_warning_notify_time = (
+                    now - WARNING_NOTIFY_COOLDOWN_SECONDS + NOTIFY_RETRY_SECONDS
+                )
         except Exception as e:
             print(f"⚠️ Auto-notify warning failed: {e}")
 
@@ -328,8 +345,13 @@ class FusionAnalysisState:
         if now - self._last_blockage_notify_time < BLOCKAGE_NOTIFY_COOLDOWN_SECONDS:
             return
         try:
-            if await self._send_system_template(NotificationType.BLOCKAGE, "🪵 [SURFACE OBSTRUCTION]"):
+            result = await self._send_system_template(NotificationType.BLOCKAGE, "🪵 [SURFACE OBSTRUCTION]")
+            if result is True:
                 self._last_blockage_notify_time = now
+            elif result is None:
+                self._last_blockage_notify_time = (
+                    now - BLOCKAGE_NOTIFY_COOLDOWN_SECONDS + NOTIFY_RETRY_SECONDS
+                )
         except Exception as e:
             print(f"⚠️ Auto-notify surface obstruction failed: {e}")
 
