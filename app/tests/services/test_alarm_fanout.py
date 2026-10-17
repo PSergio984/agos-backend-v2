@@ -38,75 +38,65 @@ NS_MODULE = "app.services.notification_service"
 # ---------------------------------------------------------------------------
 
 
-def _endpoint_patches(site):
-    return (
-        patch(
-            f"{PUSH_MOD}.location_crud",
-            **{"get_for_share": AsyncMock(return_value=site)},
-        ),
-        patch(
-            f"{PUSH_MOD}.notification_service",
-            **{"send_alarm": AsyncMock()},
-        ),
+def _endpoint_patch(sent=5, side_effect=None):
+    """The endpoint is thin: the site gate + audience live in the service."""
+    return patch(
+        f"{PUSH_MOD}.notification_service",
+        **{"send_alarm": AsyncMock(return_value=sent, side_effect=side_effect)},
     )
 
 
 def test_send_alarm_endpoint_dispatches_to_site(admin_client):
-    site = MagicMock(is_active=True)
-    loc_p, svc_p = _endpoint_patches(site)
-
-    with loc_p, svc_p as svc_mock:
+    with _endpoint_patch(sent=3) as svc_p:
         res = admin_client.post(
             "/api/v1/push/send-alarm",
             json={"location_id": SITE_A, "title": "FLOOD ALARM", "message": "Evacuate now"},
         )
 
-    assert res.status_code == 204
-    svc_mock.send_alarm.assert_awaited_once()
-    kwargs = svc_mock.send_alarm.call_args.kwargs
+    assert res.status_code == 200
+    assert res.json() == {"sent_count": 3}
+    svc_mock = svc_p.send_alarm
+    svc_mock.assert_awaited_once()
+    kwargs = svc_mock.call_args.kwargs
     assert kwargs["location_id"] == SITE_A
     assert kwargs["title"] == "FLOOD ALARM"
     assert kwargs["message"] == "Evacuate now"
 
 
 def test_send_alarm_null_site_is_barangay_wide(admin_client):
-    loc_p, svc_p = _endpoint_patches(MagicMock(is_active=True))
-
-    with loc_p as loc_mock, svc_p as svc_mock:
+    with _endpoint_patch() as svc_p:
         res = admin_client.post(
             "/api/v1/push/send-alarm",
             json={"title": "PROVINCE ALARM", "message": "All sites"},
         )
 
-    assert res.status_code == 204
-    loc_mock.get_for_share.assert_not_called()
-    assert svc_mock.send_alarm.call_args.kwargs["location_id"] is None
+    assert res.status_code == 200
+    assert svc_p.send_alarm.call_args.kwargs["location_id"] is None
 
 
-def test_send_alarm_unknown_site_404(admin_client):
-    loc_p, svc_p = _endpoint_patches(None)
-
-    with loc_p, svc_p as svc_mock:
+def test_send_alarm_service_gate_errors_propagate(admin_client):
+    """The 404/400 site gate lives in the service — the endpoint just
+    surfaces its errors."""
+    with _endpoint_patch(side_effect=HTTPException(status_code=404, detail="Site not found.")) as svc_p:
         res = admin_client.post(
             "/api/v1/push/send-alarm",
             json={"location_id": 999, "title": "t", "message": "m"},
         )
 
     assert res.status_code == 404
-    svc_mock.send_alarm.assert_not_called()
+    svc_p.send_alarm.assert_awaited_once()
 
 
-def test_send_alarm_inactive_site_400(admin_client):
-    loc_p, svc_p = _endpoint_patches(MagicMock(is_active=False))
-
-    with loc_p, svc_p as svc_mock:
+def test_send_alarm_zero_audience_is_400(admin_client):
+    """An alarm fired at nobody must surface — a silent 204 told the admin
+    the barangay was warned when no device heard it."""
+    with _endpoint_patch(sent=0):
         res = admin_client.post(
             "/api/v1/push/send-alarm",
             json={"location_id": SITE_A, "title": "t", "message": "m"},
         )
 
     assert res.status_code == 400
-    svc_mock.send_alarm.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -150,20 +140,30 @@ def _alarm_patches(site_ids):
             f"{NS_MODULE}.notification_delivery_crud",
             **{"upsert_many_results": AsyncMock()},
         ),
+        patch(
+            "app.services.location_service.require_active_site",
+            AsyncMock(),
+        ),
     )
 
 
 async def test_send_alarm_creates_alarm_tier_dispatch_scoped_to_site():
     at_site = uuid.uuid4()
-    crud_r, crud_d, crud_sub, crud_del = _alarm_patches({at_site})
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({at_site})
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock:
-        await notification_service.send_alarm(
+    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock, gate as gate_mock:
+        sent = await notification_service.send_alarm(
             db=AsyncMock(),
             location_id=SITE_A,
             title="FLOOD ALARM",
             message="Evacuate now",
         )
+
+    # The active-site gate is the service's own — a future autonomous
+    # trigger inherits it.
+    gate_mock.assert_awaited_once()
+    assert gate_mock.call_args.kwargs["location_id"] == SITE_A
+    assert sent == 1
 
     # Audience resolves via active presence at the alarm site — the same
     # resolver the fusion/auto-notify path uses.
@@ -186,13 +186,16 @@ async def test_send_alarm_creates_alarm_tier_dispatch_scoped_to_site():
 
 async def test_send_alarm_null_site_fans_out_barangay_wide():
     ids = {uuid.uuid4(), uuid.uuid4()}
-    crud_r, crud_d, crud_sub, crud_del = _alarm_patches(ids)
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches(ids)
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock:
-        await notification_service.send_alarm(
+    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock, gate as gate_mock:
+        sent = await notification_service.send_alarm(
             db=AsyncMock(), location_id=None, title="t", message="m"
         )
 
+    # NULL site: no gate call — barangay-wide needs no site check.
+    gate_mock.assert_not_called()
+    assert sent == 2
     assert (
         r_mock.get_responder_ids_with_push_subscription.call_args.kwargs["location_id"]
         is None
@@ -205,16 +208,36 @@ async def test_send_alarm_null_site_fans_out_barangay_wide():
 
 
 async def test_send_alarm_no_site_responders_creates_no_dispatch():
-    crud_r, crud_d, crud_sub, crud_del = _alarm_patches(set())
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches(set())
 
-    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock:
-        await notification_service.send_alarm(
+    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock, gate:
+        sent = await notification_service.send_alarm(
             db=AsyncMock(), location_id=SITE_B, title="t", message="m"
         )
 
+    assert sent == 0
     d_mock.create_for_send.assert_not_called()
     sub_mock.get_by_responder_ids.assert_not_called()
     del_mock.upsert_many_results.assert_not_called()
+
+
+async def test_send_alarm_inactive_site_raises_before_resolving():
+    """The service-level gate is the guard for every caller, including the
+    deferred autonomous trigger — an alarm to an inactive site never
+    reaches the resolver."""
+    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({uuid.uuid4()})
+
+    with crud_r as r_mock, crud_d, crud_sub, crud_del, patch(
+        "app.services.location_service.require_active_site",
+        AsyncMock(side_effect=HTTPException(status_code=400, detail="Site is inactive.")),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await notification_service.send_alarm(
+                db=AsyncMock(), location_id=SITE_B, title="t", message="m"
+            )
+
+    assert exc.value.status_code == 400
+    r_mock.get_responder_ids_with_push_subscription.assert_not_called()
 
 
 async def test_manual_send_cannot_claim_alarm_tier():
@@ -271,5 +294,93 @@ async def test_push_payload_marks_alarm_tier():
         )
 
     assert result == "sent"
+    assert webpush_mock.call_args.kwargs["timeout"] == 10
     data = json.loads(webpush_mock.call_args.kwargs["data"])
     assert data["type"] == NotificationType.ALARM.value
+
+
+# ---------------------------------------------------------------------------
+# Review-round fixes — escalation keeps the tier, audience filters apply
+# ---------------------------------------------------------------------------
+
+
+async def test_escalation_keeps_alarm_tier():
+    """An unacknowledged ALARM escalates as an ALARM — downgrading the ping
+    to CRITICAL strips the takeover render in the responder app."""
+    from app.core.escalation import escalation_check_job
+
+    delivery = MagicMock()
+    delivery.dispatch.location_id = SITE_A
+    delivery.dispatch.type = NotificationType.ALARM
+    delivery.responder_id = uuid.uuid4()
+    delivery.id = 1
+
+    db = AsyncMock()
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=db)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    settings_vals = {"escalation_timeout_minutes": "10", "max_escalation_count": "3"}
+
+    with (
+        patch("app.core.escalation.AsyncSessionLocal", return_value=session),
+        patch(
+            "app.crud.system_settings.system_settings_crud",
+            **{"get_value": AsyncMock(side_effect=lambda db, key: settings_vals[key])},
+        ),
+        patch(
+            "app.crud.notification_delivery.notification_delivery_crud",
+            **{
+                "get_unacknowledged_critical_past_threshold": AsyncMock(
+                    return_value=[delivery]
+                ),
+                "increment_escalation_count": AsyncMock(),
+            },
+        ),
+        patch(
+            "app.crud.location.location_crud",
+            **{"get": AsyncMock(return_value=MagicMock(name="Site A"))},
+        ),
+        patch(
+            "app.services.notification_service.NotificationService.send_notification_to_subscribers",
+            AsyncMock(),
+        ) as send_mock,
+    ):
+        await escalation_check_job()
+
+    payload = send_mock.call_args.kwargs["payload"]
+    assert payload.custom_notification.type == NotificationType.ALARM
+    assert "Alarm" in payload.custom_notification.title
+    assert send_mock.call_args.kwargs["location_id"] == SITE_A
+
+
+async def test_fanout_resolver_excludes_inactive_and_suspended():
+    """The shared audience resolver must join Responder + Location and filter
+    on responder status and site is_active — otherwise a barangay-wide alarm
+    reaches suspended responders and responders at deactivated sites."""
+    from app.crud import responder_crud
+
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        return_value=MagicMock(all=MagicMock(return_value=[]))
+    )
+
+    await responder_crud.get_responder_ids_with_push_subscription(db=db)
+
+    sql = str(db.execute.call_args.args[0])
+    assert "JOIN" in sql.upper()
+    assert "status" in sql
+    assert "is_active" in sql
+
+
+def test_alarm_cannot_be_created_as_template():
+    """Until the autonomous trigger path exists, an ALARM template would be
+    undeletable and would silently become the system template."""
+    from pydantic import ValidationError
+
+    from app.schemas.notification_template import CreateNotificationTemplateRequest
+
+    with pytest.raises(ValidationError):
+        CreateNotificationTemplateRequest(
+            type=NotificationType.ALARM, title="t", message="m"
+        )

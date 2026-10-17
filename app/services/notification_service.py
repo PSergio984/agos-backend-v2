@@ -150,7 +150,7 @@ class NotificationService:
         location_id: int | None,
         title: str,
         message: str,
-    ) -> None:
+    ) -> int:
         """T8 — alarm tier. Same dispatch → fan-out path as any send; the
         ALARM type on the dispatch (and the push payload) is what makes the
         responder app render the NDRRMC-style takeover UI.
@@ -159,12 +159,23 @@ class NotificationService:
         resolver the fusion auto-notify path uses. location_id NULL =
         barangay-wide. A future autonomous trigger calls this with the site
         resolved from sensor_devices.location_id at fire time.
+
+        Returns the resolved audience count — a caller-facing signal so an
+        alarm fired at zero push-subscribed responders surfaces instead of
+        passing silently (the endpoint turns 0 into a 400).
         """
+        # The site gate lives here, not in the endpoint, so a future
+        # autonomous trigger inherits the FOR SHARE active-site check.
+        from app.services.location_service import require_active_site
+
+        if location_id is not None:
+            await require_active_site(db=db, location_id=location_id)
+
         responder_ids = await responder_crud.get_responder_ids_with_push_subscription(
             db=db, location_id=location_id
         )
         if not responder_ids:
-            return
+            return 0
 
         payload = SendNotificationSchema(
             responder_ids=list(responder_ids),
@@ -180,6 +191,7 @@ class NotificationService:
             system_initiated=True,
             location_id=location_id,
         )
+        return len(responder_ids)
 
 
     async def send_to_citizen_subscribers(
@@ -300,6 +312,9 @@ class NotificationService:
                 }),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": settings.VAPID_CLAIM_EMAIL},
+                # Bound the sync webpush call — it runs inside the txn that
+                # holds the endpoint's FOR SHARE site lock.
+                timeout=10,
             )
             return PushResult.SENT
         except WebPushException as e:

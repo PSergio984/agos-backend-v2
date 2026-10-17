@@ -22,17 +22,19 @@ from app.crud import (
     notification_delivery_crud,
     system_settings_crud,
 )
+from app.models.notification_template import NotificationType
 from app.services import notification_service
 
 SITE_A = 1
 SITE_B = 2
 
 
-def _delivery(responder_id, location_id):
+def _delivery(responder_id, location_id, notif_type=NotificationType.CRITICAL):
     d = MagicMock()
     d.id = uuid.uuid4()
     d.responder_id = responder_id
     d.dispatch.location_id = location_id
+    d.dispatch.type = notif_type
     return d
 
 

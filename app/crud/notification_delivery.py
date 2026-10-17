@@ -10,6 +10,10 @@ from app.models.notification_template import NotificationType
 from .base import CRUDBase
 
 
+# Tiers that escalate when unacknowledged — critical-or-above (#21/T8).
+ESCALATING_TYPES = (NotificationType.CRITICAL, NotificationType.ALARM)
+
+
 class CRUDNotificationDelivery(CRUDBase):
 
     async def upsert_many_results(self, db: AsyncSession, dispatch_id: int, delivery_rows: list[dict[str, Any]]) -> None:
@@ -159,7 +163,6 @@ class CRUDNotificationDelivery(CRUDBase):
     ) -> list[NotificationDelivery]:
         from datetime import datetime, timezone, timedelta
         from app.models.notification_dispatch import NotificationDispatch
-        from app.models.notification_template import NotificationType
 
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
 
@@ -175,9 +178,7 @@ class CRUDNotificationDelivery(CRUDBase):
                 Acknowledgement.id.is_(None),
                 # ALARM is the critical-or-above tier: unacknowledged alarms
                 # escalate like criticals (#21/T8).
-                NotificationDispatch.type.in_(
-                    [NotificationType.CRITICAL, NotificationType.ALARM]
-                ),
+                NotificationDispatch.type.in_(ESCALATING_TYPES),
                 NotificationDelivery.sent_at < cutoff,
                 NotificationDelivery.escalation_count < max_escalation,
             )

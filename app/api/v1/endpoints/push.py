@@ -38,24 +38,23 @@ async def send_notification_to_responders(payload: SendNotificationSchema, db: A
     )
 
 
-@router.post("/send-alarm", status_code=204, dependencies=[Depends(require_auth)])
-async def send_alarm(payload: SendAlarmSchema, db: AsyncSession = Depends(get_db)) -> None:
+@router.post("/send-alarm", dependencies=[Depends(require_auth)])
+async def send_alarm(payload: SendAlarmSchema, db: AsyncSession = Depends(get_db)) -> dict:
     """Admin-triggered alarm (T8): same dispatch pipeline, ALARM tier. A NULL
-    location_id is the barangay-wide path."""
-    if payload.location_id is not None:
-        # FOR SHARE — the gated-writer pattern: an alarm to a site being
-        # deactivated serializes against update_site's deactivation commit.
-        location = await location_crud.get_for_share(db=db, id=payload.location_id)
-        if location is None:
-            raise HTTPException(status_code=404, detail="Location not found")
-        if not location.is_active:
-            raise HTTPException(status_code=400, detail="Site is not active")
-    await notification_service.send_alarm(
+    location_id is the barangay-wide path. The FOR SHARE active-site gate lives
+    in the service so a future autonomous trigger inherits it."""
+    sent_count = await notification_service.send_alarm(
         db=db,
         location_id=payload.location_id,
         title=payload.title,
         message=payload.message,
     )
+    if sent_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No push-subscribed responders for this site",
+        )
+    return {"sent_count": sent_count}
 
 
 @router.post("/subscribe-citizen", status_code=204)

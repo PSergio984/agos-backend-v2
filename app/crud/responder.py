@@ -2,7 +2,7 @@ from app.crud.base import CRUDBase
 from fastapi import HTTPException
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
-from app.models import Responder
+from app.models import Location, Responder
 from app.models.responder_related.push_subscription import PushSubscription
 from app.models.responder_related.responders import ResponderStatus
 from datetime import datetime, timezone
@@ -26,12 +26,25 @@ class CRUDResponder(CRUDBase[None, None, None]):
     async def get_responder_ids_with_push_subscription(self, db: AsyncSession, location_id: int | None = None) -> set[UUID]:
 
         """Returns responder IDs that have at least one push subscription. Lightweight query, no relationship load.
-        When location_id is given, only responders whose effective site matches are returned."""
-        stmt = select(PushSubscription.responder_id).distinct()
+        Only ACTIVE responders whose effective site is active — a suspended responder
+        or a deactivated site must not receive fan-out. When location_id is given,
+        only responders whose effective site matches are returned."""
+        stmt = (
+            select(PushSubscription.responder_id)
+            .join(Responder, Responder.id == PushSubscription.responder_id)
+            .join(
+                Location,
+                Location.id
+                == func.coalesce(Responder.active_location_id, Responder.location_id),
+            )
+            .where(
+                Responder.status == ResponderStatus.ACTIVE,
+                Location.is_active,
+            )
+            .distinct()
+        )
         if location_id is not None:
-            stmt = stmt.join(
-                Responder, Responder.id == PushSubscription.responder_id
-            ).where(
+            stmt = stmt.where(
                 func.coalesce(Responder.active_location_id, Responder.location_id) == location_id
             )
         result = await db.execute(stmt)
