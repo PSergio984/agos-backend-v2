@@ -155,15 +155,6 @@ class CRUDResponder(CRUDBase[None, None, None]):
         return result.scalars().first()
 
 
-    async def approve_responder(self, db: AsyncSession, responder: Responder, user_id: str) -> None:
-
-        responder.status = 'approved'
-        responder.approved_at = datetime.now(timezone.utc)
-        responder.approved_by = user_id
-        db.add(responder)
-        # commited at the service layer for idempotency
-
-
     # used in checking existing phone numbers
     async def record_exists(self, db: AsyncSession, phone_number: str) -> bool:
 
@@ -225,8 +216,14 @@ class CRUDResponder(CRUDBase[None, None, None]):
         phone_number: str | None,
         location_id: int | None = None,
     ) -> Responder:
+        # FOR UPDATE: read-modify-write. Site-moving callers already hold the
+        # location FOR SHARE (lock order location → responder); the row lock
+        # serializes the location/active_location move against other
+        # responder-row writers (#29).
         result = await db.execute(
-            select(self.model).filter(self.model.id == responder_id)
+            select(self.model)
+            .filter(self.model.id == responder_id)
+            .with_for_update()
         )
         responder = result.scalars().first()
         if not responder:

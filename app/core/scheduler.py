@@ -142,6 +142,10 @@ def start_scheduler():
         IntervalTrigger(minutes=5),
         id="escalation_check_job",
         replace_existing=True,
+        # Within one process a slow run must not overlap the next tick —
+        # cross-process dedup is the delivery row locks (#26).
+        max_instances=1,
+        coalesce=True,
         misfire_grace_time=300,
     )
     scheduler.start()

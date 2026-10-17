@@ -287,7 +287,7 @@ responder, enforced in the database (not just in service code).
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| type | `notificationtype` ENUM | NOT NULL; migration-defined labels `WARNING` / `CRITICAL` / `BLOCKAGE` / `ANNOUNCEMENT` |
+| type | `notificationtype` ENUM | NOT NULL; migration-defined labels `WARNING` / `CRITICAL` / `BLOCKAGE` / `ANNOUNCEMENT` / `ALARM` / `MAINTENANCE` |
 | title | VARCHAR | NOT NULL |
 | message | VARCHAR | NOT NULL |
 | created_by_id | UUID | FK → `admin_users.id`, ON DELETE RESTRICT, NOT NULL |
@@ -296,21 +296,19 @@ responder, enforced in the database (not just in service code).
 **Indexes:** `id` and a partial unique index on `type` for `WARNING`,
 `CRITICAL`, and `BLOCKAGE`. This permits multiple announcement templates.
 
-The SQLAlchemy enum also declares `MAINTENANCE`, but it has not been added to the
-PostgreSQL enum by a migration. See [Known model/migration drift](#known-modelmigration-drift).
-
 ### notification_dispatches
 
 | Column | Type | Constraints |
 |--------|------|-------------|
 | id | INTEGER | PK, AUTO, NOT NULL |
-| type | `notificationtype` ENUM | NOT NULL; same deployed labels and drift as `notification_templates.type` |
+| type | `notificationtype` ENUM | NOT NULL; same deployed labels as `notification_templates.type` |
 | title | VARCHAR | NOT NULL |
 | message | VARCHAR | NOT NULL |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT UTC now |
 | location_id | INTEGER | FK → `locations.id`, NULLABLE; the site the dispatch targeted — NULL = announcement fanned out to every site |
 | claimed_by | UUID | FK → `responders.id`, NULLABLE; responder who took the alert ("On it") |
 | claimed_at | TIMESTAMPTZ | NULLABLE |
+| is_escalation | BOOLEAN | NOT NULL, DEFAULT `false`; TRUE = dispatch spawned by the escalation job — its deliveries never re-qualify for escalation |
 
 **Indexes:** `id` and `type`.
 
@@ -327,6 +325,7 @@ PostgreSQL enum by a migration. See [Known model/migration drift](#known-modelmi
 | error_message | TEXT | NULLABLE |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT UTC now |
 | escalation_count | INTEGER | NOT NULL, DEFAULT `0` |
+| last_escalated_at | TIMESTAMPTZ | NULLABLE; written under the escalation claim lock — the re-ping predicate uses `COALESCE(last_escalated_at, sent_at)` |
 
 **Unique constraints:** (`dispatch_id`, `responder_id`) and
 (`id`, `responder_id`).
@@ -427,15 +426,13 @@ event. `basis_snapshot` stores the fusion-state evidence used for authorization.
 | key | TEXT | PK, NOT NULL |
 | json_value | JSONB | NOT NULL |
 
-## Known model/migration drift
+## Resolved drift
 
-- `NotificationType` in the SQLAlchemy model includes `MAINTENANCE`, and the API
-  accepts `maintenance` as a notification-preference key. No Alembic migration
-  adds `MAINTENANCE` to the PostgreSQL `notificationtype` enum, whose migration-defined
-  labels remain `WARNING`, `CRITICAL`, `BLOCKAGE`, and `ANNOUNCEMENT`.
-- The responder API accepts a `maintenance` preference, while the persisted
-  `NotificationPreference` model and its server-default JSON define only
-  `warning`, `critical`, `blockage`, and `announcement`.
-
-Add a migration and align the responder preference model before treating
-maintenance notifications as part of the migration-defined database contract.
+- `NotificationType.MAINTENANCE` was declared in the model without a PG enum
+  label until migration `a8b9c0d1e2f3` added it (`ALARM` was added earlier by
+  `f7a8b9c0d1e2`). All `NotificationType` members now have migration-defined
+  labels.
+- The responder API's `maintenance` preference key was silently dropped by
+  `NotificationPreference` until the field (and the `notif_preferences`
+  server default) gained it in the same migration. Rows persisted before that
+  hydrate with `maintenance=True` from the field default.

@@ -18,6 +18,8 @@ class NotificationPreference(BaseModel):
     critical: bool
     blockage: bool
     announcement: bool
+    # Default True so rows persisted before the key existed still hydrate.
+    maintenance: bool = True
 
 
 class NotificationPreferenceType(TypeDecorator):
@@ -57,8 +59,8 @@ class Responder(Base):
     notif_preferences = Column(
         NotificationPreferenceType,
         nullable=False,
-        default=lambda: NotificationPreference(warning=True, critical=True, blockage=True, announcement=True),
-        server_default=text("'{\"warning\": true, \"critical\": true, \"blockage\": true, \"announcement\": true}'::json"),
+        default=lambda: NotificationPreference(warning=True, critical=True, blockage=True, announcement=True, maintenance=True),
+        server_default=text("'{\"warning\": true, \"critical\": true, \"blockage\": true, \"announcement\": true, \"maintenance\": true}'::json"),
     )
     created_at = Column(DateTime(timezone=True), server_default=func.timezone('UTC', func.now()))
     created_by = Column(UUID(as_uuid=True), ForeignKey("admin_users.id"), nullable=False)

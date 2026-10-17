@@ -70,7 +70,7 @@ def _patches(overdue):
         ),
         patch.object(
             notification_delivery_crud,
-            "increment_escalation_count",
+            "mark_escalated",
             new=AsyncMock(),
         ),
         patch.object(
@@ -121,8 +121,11 @@ async def test_escalation_sends_one_notification_per_site():
     assert site_b_call.kwargs["payload"].responder_ids == [r3]
     assert "Site 2" in site_b_call.kwargs["payload"].custom_notification.message
 
-    # Every overdue delivery's escalation count is bumped, regardless of site.
-    assert increment_mock.await_count == 3
+    # Every overdue delivery is claimed in one bulk call, regardless of site.
+    increment_mock.assert_awaited_once()
+    assert set(increment_mock.await_args.kwargs["delivery_ids"]) == {
+        d.id for d in overdue
+    }
 
 
 async def test_escalation_dedups_responder_within_site_not_across_sites():
@@ -146,6 +149,40 @@ async def test_escalation_dedups_responder_within_site_not_across_sites():
     }
     assert sends_by_site[SITE_A].kwargs["payload"].responder_ids == [r1]
     assert sends_by_site[SITE_B].kwargs["payload"].responder_ids == [r1]
+
+
+async def test_escalation_claims_before_sending_and_marks_spawned_dispatches():
+    """#26: the claim (count bump + last_escalated_at) must land BEFORE any
+    ping goes out — that ordering is what stops an overlapping run or a
+    crash-mid-run from duplicating pings. And every spawned dispatch must
+    carry is_escalation so its own deliveries can't re-escalate — the chain
+    terminates."""
+    r1 = uuid.uuid4()
+    overdue = [_delivery(r1, SITE_A)]
+    calls = []
+
+    async def _claim(**kwargs):
+        calls.append("claim")
+
+    async def _send(**kwargs):
+        calls.append("send")
+
+    session, settings_p, unacked, increment, loc_get, send = _patches(overdue)
+    with (
+        session,
+        settings_p,
+        unacked,
+        increment as claim_mock,
+        loc_get,
+        send as send_mock,
+    ):
+        claim_mock.side_effect = _claim
+        send_mock.side_effect = _send
+        await escalation_check_job()
+
+    assert calls.index("claim") < calls.index("send")
+    assert claim_mock.await_args.kwargs["delivery_ids"] == [overdue[0].id]
+    assert send_mock.await_args.kwargs["is_escalation"] is True
 
 
 async def test_escalation_null_site_dispatch_escalates_to_everyone():
@@ -195,3 +232,49 @@ async def test_escalation_query_picks_up_stale_pending_rows():
     assert "in" in sql and "sent" in sql and "pending" in sql
     assert "coalesce" in sql
     assert "created_at" in sql
+
+
+# ---------------------------------------------------------------------------
+# #26 — the overdue query's claim semantics
+# ---------------------------------------------------------------------------
+
+
+async def test_overdue_query_excludes_escalation_dispatches_and_claimed_rows():
+    """Chain termination + concurrency guard live in the SELECT: escalation-
+    spawned dispatches are excluded, eligibility runs off the last claim
+    timestamp (not sent_at), and SKIP LOCKED keeps a second job from
+    re-reading in-flight rows."""
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+
+    await notification_delivery_crud.get_unacknowledged_critical_past_threshold(
+        db=db, timeout_minutes=10, max_escalation=3
+    )
+
+    stmt = db.execute.call_args.args[0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "is_escalation" in sql
+    assert "coalesce" in sql.lower()
+    assert "last_escalated_at" in sql
+    assert "created_at" in sql
+    # Default dialect omits the SKIP LOCKED text — check the flag itself.
+    assert stmt._for_update_arg.skip_locked is True
+
+
+async def test_mark_escalated_stamps_claim_and_count_in_one_update():
+    """The claim is a single bulk UPDATE — count and timestamp land
+    atomically, before any send-commit can release the row locks."""
+    db = MagicMock()
+    db.execute = AsyncMock()
+    db.commit = AsyncMock()
+    ids = [uuid.uuid4(), uuid.uuid4()]
+
+    await notification_delivery_crud.mark_escalated(db=db, delivery_ids=ids)
+
+    stmt = db.execute.call_args.args[0]
+    sql = str(stmt.compile())
+    assert "escalation_count" in sql
+    assert "last_escalated_at" in sql
+    db.commit.assert_awaited_once()
