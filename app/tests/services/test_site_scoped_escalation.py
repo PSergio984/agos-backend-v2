@@ -22,17 +22,19 @@ from app.crud import (
     notification_delivery_crud,
     system_settings_crud,
 )
+from app.models.notification_template import NotificationType
 from app.services import notification_service
 
 SITE_A = 1
 SITE_B = 2
 
 
-def _delivery(responder_id, location_id):
+def _delivery(responder_id, location_id, notif_type=NotificationType.CRITICAL):
     d = MagicMock()
     d.id = uuid.uuid4()
     d.responder_id = responder_id
     d.dispatch.location_id = location_id
+    d.dispatch.type = notif_type
     return d
 
 
@@ -173,3 +175,23 @@ async def test_escalation_null_site_dispatch_escalates_to_everyone():
         call.kwargs["payload"].custom_notification.message
         == "You have unacknowledged critical alerts. Please review and respond immediately."
     )
+
+
+async def test_escalation_query_picks_up_stale_pending_rows():
+    """PR #25 review: pre-push intent rows are PENDING with sent_at=None.
+    A crash between push and outcome commit orphans one — the escalation
+    query must still reach it via created_at or the alarm dies silently."""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    db.execute.return_value = result
+
+    await notification_delivery_crud.get_unacknowledged_critical_past_threshold(
+        db=db, timeout_minutes=10, max_escalation=3
+    )
+
+    stmt = db.execute.call_args.args[0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "in" in sql and "sent" in sql and "pending" in sql
+    assert "coalesce" in sql
+    assert "created_at" in sql

@@ -1,5 +1,6 @@
 from .admin_user import AdminUser
 from .admin_audit_log import AdminAuditLog
+from .admin_site_assignment import AdminSiteAssignment
 from .citizen_subscription import CitizenSubscription
 from .evacuation_event import EvacuationEvent, EvacuationEventKind
 from .notification_dispatch import NotificationDispatch

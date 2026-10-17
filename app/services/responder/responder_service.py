@@ -16,7 +16,7 @@ class ResponderService:
 
     async def get_all_responders(self, db: AsyncSession) -> list[ResponderListItem]:
         responders = await responder_crud.get_all(db=db)
-        ids_with_push = await responder_crud.get_responder_ids_with_push_subscription(db=db)
+        ids_with_push = await responder_crud.get_ids_with_push_subscription(db=db)
         return [
             ResponderListItem(
                 id=r.id,

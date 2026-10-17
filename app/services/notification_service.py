@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -17,7 +19,12 @@ from app.crud import (
 from app.models.notification_template import NotificationTemplate, NotificationType
 from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.models.responder_related.push_subscription import PushSubscription
-from app.schemas.subscription import SendNotificationSchema
+from app.schemas.subscription import (
+    CustomNotificationPayload,
+    SendNotificationSchema,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class PushResult:
@@ -35,23 +42,29 @@ class NotificationService:
         *,
         system_initiated: bool = False,
         location_id: int | None = None,
-    ) -> None:
+    ) -> int:
 
         responder_ids = list(dict.fromkeys(payload.responder_ids))
         if not responder_ids:
-            return
+            return 0
 
         # Site-scoped dispatch: deliver only to responders whose effective site
         # (active_location_id ?? location_id) matches. A NULL location_id is a
-        # global announcement — the given ids are delivered regardless of site.
+        # global send — delivered regardless of site, but still only to
+        # reachable responders, so retries/escalations can't re-ping suspended
+        # responders or responders at deactivated sites.
         if location_id is not None:
             responder_ids = await responder_crud.get_ids_in_effective_location(
                 db=db,
                 responder_ids=responder_ids,
                 location_id=location_id,
             )
-            if not responder_ids:
-                return
+        else:
+            responder_ids = await responder_crud.get_reachable_ids(
+                db=db, responder_ids=responder_ids
+            )
+        if not responder_ids:
+            return 0
 
         notif_title, notif_message, notif_type = await self._resolve_notification_content(
             payload=payload,
@@ -76,6 +89,32 @@ class NotificationService:
             }
             for responder_id in responder_ids
         }
+
+        # Persist intent before any push leaves the process: a crash between
+        # send and commit must not leave a responder holding an alarm with no
+        # durable dispatch/delivery to claim or acknowledge (PR #25 review).
+        # Placeholders are PENDING, not FAILED — a stuck-in-flight row is
+        # distinguishable from a real failure and escalation still picks it
+        # up once it's stale. The final upsert rewrites them with real
+        # outcomes (the dict defaults above stay FAILED for no-subscription
+        # responders). This commit also ends the transaction, releasing the
+        # FOR SHARE site lock before the push loop instead of holding it
+        # across N pushes.
+        await notification_delivery_crud.upsert_many_results(
+            db=db,
+            dispatch_id=dispatch.id,
+            delivery_rows=[
+                {
+                    "responder_id": responder_id,
+                    "subscription_id": None,
+                    "status": DeliveryStatus.PENDING,
+                    "sent_at": None,
+                    "error_message": None,
+                }
+                for responder_id in responder_ids
+            ],
+        )
+
         now = datetime.now(timezone.utc)
         subscriptions_to_remove: list[PushSubscription] = []
 
@@ -92,6 +131,7 @@ class NotificationService:
                 subscription=subscription,
                 notif_title=notif_title,
                 notif_message=notif_message,
+                notif_type=notif_type,
             )
             current = deliveries_by_responder[subscription.responder_id]
 
@@ -138,6 +178,71 @@ class NotificationService:
             delivery_rows=list(deliveries_by_responder.values()),
         )
 
+        # Responders actually reached — a caller reporting "sent" must not
+        # count resolved-but-undelivered rows.
+        return sum(
+            1 for row in deliveries_by_responder.values()
+            if row["status"] == DeliveryStatus.SENT
+        )
+
+
+    async def send_alarm(
+        self,
+        db: AsyncSession,
+        *,
+        location_id: int | None,
+        title: str,
+        message: str,
+    ) -> int:
+        """T8 — alarm tier. Same dispatch → fan-out path as any send; the
+        ALARM type on the dispatch (and the push payload) is what makes the
+        responder app render the NDRRMC-style takeover UI.
+
+        Audience = the site's responders via active presence — the same
+        resolver the fusion auto-notify path uses. location_id NULL =
+        barangay-wide. A future autonomous trigger calls this with the site
+        resolved from sensor_devices.location_id at fire time.
+
+        Raises 400 when the resolved audience is empty — an alarm fired at
+        zero push-subscribed responders must surface instead of passing
+        silently. Returns the number of responders a push actually reached
+        (delivery rows carry the per-responder failures for the rest).
+        """
+        # The site gate lives here, not in the endpoint, so a future
+        # autonomous trigger inherits the FOR SHARE active-site check.
+        from app.services.location_service import require_active_site
+
+        if location_id is not None:
+            await require_active_site(db=db, location_id=location_id)
+
+        responder_ids = await responder_crud.get_responder_ids_with_push_subscription(
+            db=db, location_id=location_id
+        )
+        if not responder_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No push-subscribed responders for this site"
+                    if location_id is not None
+                    else "No push-subscribed responders"
+                ),
+            )
+
+        payload = SendNotificationSchema(
+            responder_ids=list(responder_ids),
+            custom_notification=CustomNotificationPayload(
+                type=NotificationType.ALARM, title=title, message=message
+            ),
+        )
+        # Trusted internal send — same announcements-only bypass escalation and
+        # the fusion path use for non-announcement types.
+        return await self.send_notification_to_subscribers(
+            payload=payload,
+            db=db,
+            system_initiated=True,
+            location_id=location_id,
+        )
+
 
     async def send_to_citizen_subscribers(
         self,
@@ -173,6 +278,7 @@ class NotificationService:
                 subscription=subscription,
                 notif_title=title,
                 notif_message=message,
+                notif_type=notif_type,
             )
             if result == PushResult.SENT:
                 sent_count += 1
@@ -236,10 +342,15 @@ class NotificationService:
         return custom_title, custom_message, custom_notification.type
 
 
-    async def send_push(self, subscription: PushSubscription, notif_title: str, notif_message: str) -> PushResult:
-        
+    async def send_push(self, subscription: PushSubscription, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
+
         try:
-            webpush(
+            # to_thread: pywebpush's send() is a sync requests.post — on the
+            # loop it stalls every concurrent request, and on the alarm path
+            # the stall happens inside the txn holding the FOR SHARE site
+            # lock. timeout=10 bounds each call.
+            await asyncio.to_thread(
+                webpush,
                 subscription_info={
                     "endpoint": subscription.endpoint,
                     "keys": {
@@ -247,12 +358,16 @@ class NotificationService:
                         "auth": subscription.auth,
                     },
                 },
+                # "type" lets the app render tiered UI (e.g. alarm takeover)
+                # straight off the push, without a feed fetch first.
                 data=json.dumps({
                     "title": notif_title,
                     "message": notif_message,
+                    "type": notif_type.value,
                 }),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": settings.VAPID_CLAIM_EMAIL},
+                timeout=10,
             )
             return PushResult.SENT
         except WebPushException as e:
@@ -261,6 +376,13 @@ class NotificationService:
             )
             if status == 410: # subscription is no longer valid
                 return PushResult.GONE
+            return PushResult.FAILED
+        except Exception:
+            # Any per-subscription failure — transport error, malformed stored
+            # keys, library internals — fails this delivery row, never aborts
+            # the rest of the fan-out. Log so a systemic failure (bad VAPID
+            # config) isn't indistinguishable from stale endpoints.
+            logger.exception("Web push failed for endpoint %s", subscription.endpoint)
             return PushResult.FAILED
 
 notification_service = NotificationService()

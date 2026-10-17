@@ -10,6 +10,10 @@ from app.models.notification_template import NotificationType
 from .base import CRUDBase
 
 
+# Tiers that escalate when unacknowledged — critical-or-above (#21/T8).
+ESCALATING_TYPES = (NotificationType.CRITICAL, NotificationType.ALARM)
+
+
 class CRUDNotificationDelivery(CRUDBase):
 
     async def upsert_many_results(self, db: AsyncSession, dispatch_id: int, delivery_rows: list[dict[str, Any]]) -> None:
@@ -159,7 +163,6 @@ class CRUDNotificationDelivery(CRUDBase):
     ) -> list[NotificationDelivery]:
         from datetime import datetime, timezone, timedelta
         from app.models.notification_dispatch import NotificationDispatch
-        from app.models.notification_template import NotificationType
 
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
 
@@ -171,10 +174,24 @@ class CRUDNotificationDelivery(CRUDBase):
             .outerjoin(Acknowledgement, Acknowledgement.delivery_id == NotificationDelivery.id)
             .join(NotificationDispatch)
             .where(
-                NotificationDelivery.status == DeliveryStatus.SENT,
+                # SENT rows re-ping when unacked past the timeout; PENDING
+                # rows are send-intent placeholders orphaned by a crash
+                # mid-fan-out — their push may have landed, so they escalate
+                # too (at-most-one extra ping beats a silently dead alarm).
+                NotificationDelivery.status.in_(
+                    [DeliveryStatus.SENT, DeliveryStatus.PENDING]
+                ),
                 Acknowledgement.id.is_(None),
-                NotificationDispatch.type == NotificationType.CRITICAL,
-                NotificationDelivery.sent_at < cutoff,
+                # ALARM is the critical-or-above tier: unacknowledged alarms
+                # escalate like criticals (#21/T8).
+                NotificationDispatch.type.in_(ESCALATING_TYPES),
+                # PENDING placeholders have no sent_at — fall back to
+                # created_at so a crash-orphaned row still ages past the
+                # cutoff instead of sitting invisible forever.
+                func.coalesce(
+                    NotificationDelivery.sent_at,
+                    NotificationDelivery.created_at,
+                ) < cutoff,
                 NotificationDelivery.escalation_count < max_escalation,
             )
             .with_for_update(of=NotificationDelivery)

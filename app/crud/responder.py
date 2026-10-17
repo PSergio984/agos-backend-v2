@@ -2,7 +2,7 @@ from app.crud.base import CRUDBase
 from fastapi import HTTPException
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
-from app.models import Responder
+from app.models import Location, Responder
 from app.models.responder_related.push_subscription import PushSubscription
 from app.models.responder_related.responders import ResponderStatus
 from datetime import datetime, timezone
@@ -26,28 +26,85 @@ class CRUDResponder(CRUDBase[None, None, None]):
     async def get_responder_ids_with_push_subscription(self, db: AsyncSession, location_id: int | None = None) -> set[UUID]:
 
         """Returns responder IDs that have at least one push subscription. Lightweight query, no relationship load.
-        When location_id is given, only responders whose effective site matches are returned."""
-        stmt = select(PushSubscription.responder_id).distinct()
+        Only ACTIVE responders whose effective site is active — a non-active responder
+        or a deactivated site must not receive fan-out. When location_id is given,
+        only responders whose effective site matches are returned."""
+        stmt = (
+            select(PushSubscription.responder_id)
+            .join(Responder, Responder.id == PushSubscription.responder_id)
+            .join(
+                Location,
+                Location.id
+                == func.coalesce(Responder.active_location_id, Responder.location_id),
+            )
+            .where(
+                Responder.status == ResponderStatus.ACTIVE,
+                Location.is_active,
+            )
+            .distinct()
+        )
         if location_id is not None:
-            stmt = stmt.join(
-                Responder, Responder.id == PushSubscription.responder_id
-            ).where(
+            stmt = stmt.where(
                 func.coalesce(Responder.active_location_id, Responder.location_id) == location_id
             )
         result = await db.execute(stmt)
         return {row[0] for row in result.all()}
 
 
+    async def get_ids_with_push_subscription(self, db: AsyncSession) -> set[UUID]:
+
+        """Responders owning at least one push subscription — the admin list's
+        has_push_subscription badge. Unlike get_responder_ids_with_push_subscription,
+        no status/site filtering: the badge reports a stored subscription, not
+        current reachability."""
+        result = await db.execute(select(PushSubscription.responder_id).distinct())
+        return {row[0] for row in result.all()}
+
+
     async def get_ids_in_effective_location(self, db: AsyncSession, responder_ids: list[UUID], location_id: int) -> list[UUID]:
 
-        """Subset of the given responder IDs whose effective site is location_id.
-        Effective site = active_location_id when set, else home location_id."""
+        """Subset of the given responder IDs who can receive a send at
+        location_id: effective site (active_location_id when set, else home
+        location_id) matches, responder is ACTIVE, and that site is active —
+        the same hygiene as the fan-out resolver, so retries/escalations can't
+        reach non-active responders or deactivated sites."""
         if not responder_ids:
             return []
         result = await db.execute(
-            select(self.model.id).where(
+            select(self.model.id)
+            .join(
+                Location,
+                Location.id
+                == func.coalesce(self.model.active_location_id, self.model.location_id),
+            )
+            .where(
                 self.model.id.in_(responder_ids),
+                self.model.status == ResponderStatus.ACTIVE,
+                Location.is_active,
                 func.coalesce(self.model.active_location_id, self.model.location_id) == location_id,
+            )
+        )
+        return list(result.scalars().all())
+
+
+    async def get_reachable_ids(self, db: AsyncSession, responder_ids: list[UUID]) -> list[UUID]:
+
+        """Subset of the given responder IDs who can currently receive a send
+        — ACTIVE responders at an active effective site. The site-agnostic
+        counterpart of get_ids_in_effective_location for barangay-wide sends."""
+        if not responder_ids:
+            return []
+        result = await db.execute(
+            select(self.model.id)
+            .join(
+                Location,
+                Location.id
+                == func.coalesce(self.model.active_location_id, self.model.location_id),
+            )
+            .where(
+                self.model.id.in_(responder_ids),
+                self.model.status == ResponderStatus.ACTIVE,
+                Location.is_active,
             )
         )
         return list(result.scalars().all())

@@ -118,7 +118,10 @@ def _send_patches(site_ids=None):
         patch(
             f"{NS_MODULE}.responder_crud",
             **{
-                "get_ids_in_effective_location": AsyncMock(return_value=site_ids)
+                "get_ids_in_effective_location": AsyncMock(return_value=site_ids),
+                "get_reachable_ids": AsyncMock(
+                    side_effect=lambda db, responder_ids: responder_ids
+                ),
             },
         ),
         patch(
@@ -176,6 +179,9 @@ async def test_null_site_dispatch_delivers_to_all_given_ids():
         )
 
     r_mock.get_ids_in_effective_location.assert_not_called()
+    # Barangay-wide skips the site filter but keeps the reachable-only gate.
+    r_mock.get_reachable_ids.assert_awaited_once()
+    assert set(r_mock.get_reachable_ids.call_args.kwargs["responder_ids"]) == set(ids)
     assert d_mock.create_for_send.call_args.kwargs["location_id"] is None
     rows = del_mock.upsert_many_results.call_args.kwargs["delivery_rows"]
     assert {row["responder_id"] for row in rows} == set(ids)
