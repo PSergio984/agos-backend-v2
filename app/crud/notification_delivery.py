@@ -179,21 +179,39 @@ class CRUDNotificationDelivery(CRUDBase):
                 # ALARM is the critical-or-above tier: unacknowledged alarms
                 # escalate like criticals (#21/T8).
                 NotificationDispatch.type.in_(ESCALATING_TYPES),
-                NotificationDelivery.sent_at < cutoff,
+                # Escalation pings are notifications OF an alert, not new
+                # alerts — without this they spawn another generation every
+                # run and an unacknowledged alert pings forever (#26).
+                NotificationDispatch.is_escalation.is_(False),
+                # last_escalated_at (not sent_at) bounds the cadence: rows
+                # re-qualify only a full timeout after their last claim, and
+                # a concurrent run can't re-select rows another run claimed.
+                func.coalesce(
+                    NotificationDelivery.last_escalated_at,
+                    NotificationDelivery.sent_at,
+                ) < cutoff,
                 NotificationDelivery.escalation_count < max_escalation,
             )
-            .with_for_update(of=NotificationDelivery)
+            # SKIP LOCKED: a second job skips in-flight claims instead of
+            # blocking then re-reading them once the first run commits.
+            .with_for_update(of=NotificationDelivery, skip_locked=True)
         )
 
         result = await db.execute(stmt)
         return list(result.scalars().unique().all())
 
-    async def increment_escalation_count(self, db: AsyncSession, delivery_id: UUID) -> None:
+    async def mark_escalated(self, db: AsyncSession, delivery_ids: list[UUID]) -> None:
+        """Claim overdue deliveries before their pings go out — the increment
+        and timestamp land atomically, so a crash can't leave pinged-but-
+        unclaimed rows that the next run would re-ping (#26)."""
         from sqlalchemy import update
         stmt = (
             update(self.model)
-            .where(self.model.id == delivery_id)
-            .values(escalation_count=self.model.escalation_count + 1)
+            .where(self.model.id.in_(delivery_ids))
+            .values(
+                escalation_count=self.model.escalation_count + 1,
+                last_escalated_at=func.now(),
+            )
         )
         await db.execute(stmt)
         await db.commit()

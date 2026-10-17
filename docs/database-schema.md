@@ -308,6 +308,7 @@ responder, enforced in the database (not just in service code).
 | location_id | INTEGER | FK → `locations.id`, NULLABLE; the site the dispatch targeted — NULL = announcement fanned out to every site |
 | claimed_by | UUID | FK → `responders.id`, NULLABLE; responder who took the alert ("On it") |
 | claimed_at | TIMESTAMPTZ | NULLABLE |
+| is_escalation | BOOLEAN | NOT NULL, DEFAULT `false`; TRUE = dispatch spawned by the escalation job — its deliveries never re-qualify for escalation |
 
 **Indexes:** `id` and `type`.
 
@@ -324,6 +325,7 @@ responder, enforced in the database (not just in service code).
 | error_message | TEXT | NULLABLE |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT UTC now |
 | escalation_count | INTEGER | NOT NULL, DEFAULT `0` |
+| last_escalated_at | TIMESTAMPTZ | NULLABLE; written under the escalation claim lock — the re-ping predicate uses `COALESCE(last_escalated_at, sent_at)` |
 
 **Unique constraints:** (`dispatch_id`, `responder_id`) and
 (`id`, `responder_id`).

@@ -267,7 +267,9 @@ def _patch_state_send(monkeypatch, ids):
     monkeypatch.setattr(
         responder_crud, "get_responder_ids_with_push_subscription", get_ids
     )
-    send = AsyncMock()
+    # The real send returns the SENT delivery count — the fusion cooldown
+    # arms on sent > 0.
+    send = AsyncMock(return_value=1)
     monkeypatch.setattr(
         notification_service_instance, "send_notification_to_subscribers", send
     )

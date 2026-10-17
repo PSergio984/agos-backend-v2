@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -19,6 +19,11 @@ class NotificationDispatch(Base):
     # Site this dispatch belongs to. NULL = global announcement, delivered to
     # every active responder regardless of site.
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
+
+    # Spawned by the escalation job rather than an admin/system send — its
+    # deliveries must never qualify for escalation themselves, or one
+    # unacknowledged alert would ping forever (#26).
+    is_escalation = Column(Boolean, nullable=False, server_default="false")
 
     # "On it" claim — the responder who said they're handling this alert.
     # Claim is deliberately not completion: acknowledge stays the closing log.

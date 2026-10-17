@@ -13,6 +13,7 @@ class CRUDNotificationDispatch(CRUDBase):
         title: str,
         message: str,
         location_id: int | None = None,
+        is_escalation: bool = False,
     ) -> NotificationDispatch:
 
         dispatch = NotificationDispatch(
@@ -20,6 +21,7 @@ class CRUDNotificationDispatch(CRUDBase):
             title=title,
             message=message,
             location_id=location_id,
+            is_escalation=is_escalation,
         )
         db.add(dispatch)
         await db.flush()

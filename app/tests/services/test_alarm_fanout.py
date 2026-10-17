@@ -413,7 +413,7 @@ async def test_escalation_keeps_alarm_tier():
                 "get_unacknowledged_critical_past_threshold": AsyncMock(
                     return_value=[delivery]
                 ),
-                "increment_escalation_count": AsyncMock(),
+                "mark_escalated": AsyncMock(),
             },
         ),
         patch(

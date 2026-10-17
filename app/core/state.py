@@ -280,14 +280,17 @@ class FusionAnalysisState:
                 template_id=template.id,
                 custom_notification=None,
             )
-            await notification_service.send_notification_to_subscribers(
+            sent = await notification_service.send_notification_to_subscribers(
                 payload=payload,
                 db=db,
                 system_initiated=True,
                 location_id=self.location_id,
             )
-            print(f"{log_label} Auto-notified {len(responder_ids)} responders (location {self.location_id})")
-            return True
+            # Arm the caller's cooldown only when a push actually landed —
+            # returning True on a zero-delivery send would silence the alert
+            # for the whole window.
+            print(f"{log_label} Auto-notified {sent}/{len(responder_ids)} responders (location {self.location_id})")
+            return sent > 0
 
 
     async def _auto_notify_critical(self) -> None:

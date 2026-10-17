@@ -30,6 +30,10 @@ class NotificationDelivery(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.timezone("UTC", func.now()), nullable=False)
     escalation_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # Set when the escalation job claims the delivery for a re-ping — drives
+    # both the timeout spacing and the "already claimed" dedup (#26). NULL =
+    # never escalated (falls back to sent_at for eligibility).
+    last_escalated_at = Column(DateTime(timezone=True), nullable=True)
 
     dispatch = relationship("NotificationDispatch", back_populates="deliveries")
     responder = relationship("Responder", back_populates="deliveries")
