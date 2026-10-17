@@ -28,6 +28,7 @@ from app.schemas import AcknowledgeNotifRequest, AcknowledgeNotifResponse, Claim
 from app.schemas import ResponderActiveSiteResponse, AdminAuditLogCreate, ResponderDeploymentItem
 from app.models.responder_related.responders import ResponderStatus
 from app.services.websocket_service import websocket_service
+from app.services.location_service import require_active_site
 
 
 class ResponderAppService:
@@ -221,6 +222,12 @@ class ResponderAppService:
         effective_site = responder.active_location_id or responder.location_id
         if dispatch.location_id is not None and dispatch.location_id != effective_site:
             raise HTTPException(status_code=404, detail="Alert not found.")
+        # A claim writes dispatch state, so the dispatch's site must be
+        # writable — the FOR SHARE read serializes the claim against a
+        # concurrent deactivation commit (#29). NULL-site announcements stay
+        # claimable regardless.
+        if dispatch.location_id is not None:
+            await require_active_site(db=db, location_id=dispatch.location_id)
         if dispatch.type != NotificationType.BLOCKAGE:
             raise HTTPException(
                 status_code=403, detail="Alerts of this type cannot be claimed."

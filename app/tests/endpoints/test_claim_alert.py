@@ -156,16 +156,20 @@ def _patches(dispatch=None, has_ack=False, responder=None, has_delivery=True):
             f"{MODULE}.websocket_service",
             **{"broadcast_update": AsyncMock()},
         ),
+        patch(
+            f"{MODULE}.require_active_site",
+            new=AsyncMock(),
+        ),
     )
 
 
 async def test_service_claim_sets_fields_and_broadcasts():
     dispatch = _dispatch()
     db = AsyncMock()
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=dispatch, responder=_responder()
     )
-    with crud_d, crud_del, crud_r, ws as ws_mock:
+    with crud_d, crud_del, crud_r, ws as ws_mock, gate:
         result = await responder_app_service.claim_alert(
             dispatch_id=DISPATCH_ID,
             current_responder=CurrentResponder(id=RESPONDER_ID),
@@ -188,7 +192,7 @@ async def test_service_claim_null_site_dispatch_broadcasts_to_all_sites():
     # claim broadcast fans out to every site's channel.
     dispatch = _dispatch(location_id=None)
     db = AsyncMock()
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=dispatch, responder=_responder()
     )
     with (
@@ -216,8 +220,8 @@ async def test_service_claim_null_site_dispatch_broadcasts_to_all_sites():
 
 async def test_service_claim_already_claimed_409():
     dispatch = _dispatch(claimed_by=uuid.uuid4())
-    crud_d, crud_del, crud_r, ws = _patches(dispatch=dispatch)
-    with crud_d, crud_del, crud_r, ws:
+    crud_d, crud_del, crud_r, ws, gate = _patches(dispatch=dispatch)
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -228,8 +232,8 @@ async def test_service_claim_already_claimed_409():
 
 
 async def test_service_claim_acknowledged_409():
-    crud_d, crud_del, crud_r, ws = _patches(dispatch=_dispatch(), has_ack=True)
-    with crud_d, crud_del, crud_r, ws:
+    crud_d, crud_del, crud_r, ws, gate = _patches(dispatch=_dispatch(), has_ack=True)
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -240,10 +244,10 @@ async def test_service_claim_acknowledged_409():
 
 
 async def test_service_claim_wrong_type_403():
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=_dispatch(type=NotificationType.CRITICAL)
     )
-    with crud_d, crud_del, crud_r, ws:
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -254,8 +258,8 @@ async def test_service_claim_wrong_type_403():
 
 
 async def test_service_claim_missing_404():
-    crud_d, crud_del, crud_r, ws = _patches(dispatch=None)
-    with crud_d, crud_del, crud_r, ws:
+    crud_d, crud_del, crud_r, ws, gate = _patches(dispatch=None)
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -268,10 +272,10 @@ async def test_service_claim_missing_404():
 async def test_service_claim_not_dispatched_to_responder_404():
     # A responder holding no delivery for this dispatch gets the same 404 as
     # a nonexistent dispatch — foreign alerts aren't claimable (or leakable).
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=_dispatch(), has_delivery=False
     )
-    with crud_d, crud_del, crud_r, ws:
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -284,11 +288,11 @@ async def test_service_claim_not_dispatched_to_responder_404():
 async def test_service_claim_other_site_dispatch_404():
     # Presence-scoped claims: the responder WAS sent this dispatch but has
     # since moved — site 3 can't claim a site-2 alert.
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=_dispatch(),
         responder=_responder(location_id=3),
     )
-    with crud_d, crud_del, crud_r, ws:
+    with crud_d, crud_del, crud_r, ws, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -302,11 +306,11 @@ async def test_service_claim_deployed_site_allowed():
     # Deployed presence counts: home site is 3 but active_location_id=2 puts
     # the responder on the dispatch's site.
     dispatch = _dispatch()
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=dispatch,
         responder=_responder(location_id=3, active_location_id=2),
     )
-    with crud_d, crud_del, crud_r, ws:
+    with crud_d, crud_del, crud_r, ws, gate:
         result = await responder_app_service.claim_alert(
             dispatch_id=DISPATCH_ID,
             current_responder=CurrentResponder(id=RESPONDER_ID),
@@ -322,10 +326,10 @@ async def test_service_claim_foreign_site_dispatch_still_404():
     # broadcast, same as a dispatch that doesn't exist.
     dispatch = _dispatch(location_id=2)
     responder = _responder(location_id=1)
-    crud_d, crud_del, crud_r, ws = _patches(
+    crud_d, crud_del, crud_r, ws, gate = _patches(
         dispatch=dispatch, responder=responder, has_delivery=False
     )
-    with crud_d, crud_del, crud_r, ws as ws_mock:
+    with crud_d, crud_del, crud_r, ws as ws_mock, gate:
         with pytest.raises(HTTPException) as exc:
             await responder_app_service.claim_alert(
                 dispatch_id=DISPATCH_ID,
@@ -334,3 +338,61 @@ async def test_service_claim_foreign_site_dispatch_still_404():
             )
     assert exc.value.status_code == 404
     ws_mock.broadcast_update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# #29 — claims are site-scoped writes: gate on the dispatch site's is_active
+# ---------------------------------------------------------------------------
+
+
+async def test_service_claim_inactive_dispatch_site_rejects():
+    # The dispatch's site was deactivated after the alert went out — a claim
+    # writes dispatch state, so it must serialize against deactivation like
+    # every other gated writer. The shared gate raises 400 "Site is inactive."
+    dispatch = _dispatch()
+    crud_d, crud_del, crud_r, ws, gate = _patches(
+        dispatch=dispatch, responder=_responder()
+    )
+    with crud_d, crud_del, crud_r, ws as ws_mock, gate as gate_mock:
+        gate_mock.side_effect = HTTPException(
+            status_code=400, detail="Site is inactive."
+        )
+        with pytest.raises(HTTPException) as exc:
+            await responder_app_service.claim_alert(
+                dispatch_id=DISPATCH_ID,
+                current_responder=CurrentResponder(id=RESPONDER_ID),
+                db=AsyncMock(),
+            )
+
+    assert exc.value.status_code == 400
+    gate_mock.assert_awaited_once()
+    assert gate_mock.await_args.kwargs["location_id"] == 2
+    ws_mock.broadcast_update.assert_not_called()
+
+
+async def test_service_claim_null_site_skips_site_gate():
+    # NULL-site dispatches are announcements — not bound to any site, so no
+    # site gate applies and they stay claimable.
+    dispatch = _dispatch(location_id=None)
+    crud_d, crud_del, crud_r, ws, gate = _patches(
+        dispatch=dispatch, responder=_responder()
+    )
+    with (
+        crud_d,
+        crud_del,
+        crud_r,
+        ws,
+        gate as gate_mock,
+        patch(
+            f"{MODULE}.location_crud",
+            **{"get_all_ids": AsyncMock(return_value=[1, 2])},
+        ),
+    ):
+        await responder_app_service.claim_alert(
+            dispatch_id=DISPATCH_ID,
+            current_responder=CurrentResponder(id=RESPONDER_ID),
+            db=AsyncMock(),
+        )
+
+    gate_mock.assert_not_called()
+    assert dispatch.claimed_by == RESPONDER_ID

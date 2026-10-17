@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from app.api.v1.dependencies import CurrentUser
 from app.schemas import (
     EvacuationCenterCreate,
+    EvacuationCenterUpdate,
     EvacuationConfirmRequest,
     LocationUpdate,
     ResponderAdminUpdate,
@@ -403,6 +404,28 @@ async def test_update_responder_details_rechecks_site_under_lock():
     assert calls.index("location_lock") < calls.index("update_details")
 
 
+async def test_update_details_locks_the_responder_row():
+    """#29: update_details is a read-modify-write on responder.location_id /
+    active_location_id — the SELECT must take FOR UPDATE so a concurrent
+    responder-row writer can't interleave inside the move window."""
+    from app.crud.responder import responder_crud
+
+    responder = _responder()
+    exec_result = MagicMock()
+    exec_result.scalars.return_value.first.return_value = responder
+    db = _db()
+    db.execute = AsyncMock(return_value=exec_result)
+
+    await responder_crud.update_details(
+        db=db, responder_id=RESPONDER_ID,
+        first_name=None, last_name=None, phone_number=None,
+        location_id=SITE_B_ID,
+    )
+
+    stmt = db.execute.call_args.args[0]
+    assert "FOR UPDATE" in str(stmt.compile()).upper()
+
+
 # ---------------------------------------------------------------------------
 # bulk_create_responders — locked active-site check
 # ---------------------------------------------------------------------------
@@ -592,6 +615,66 @@ async def test_create_center_locks_site():
             current_user=_admin(),
         )
 
+    loc_crud.get_for_share.assert_awaited_once()
+
+
+async def test_update_center_locks_and_rejects_inactive_site():
+    """#29: update_center previously wrote on a deactivated site with no gate —
+    it must take the same FOR SHARE read create_center does."""
+    center = SimpleNamespace(
+        id=1, location_id=SITE_B_ID, name="Evac Center",
+        latitude=14.0, longitude=121.0, capacity=100,
+        address=None, contact=None, status="open",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    with (
+        patch(f"{CENTER_MOD}.location_crud", **{
+            "get_for_share": AsyncMock(return_value=_location(is_active=False)),
+        }) as loc_crud,
+        patch(f"{CENTER_MOD}.evacuation_center_crud", **{
+            "get": AsyncMock(return_value=center),
+            "update": AsyncMock(),
+        }),
+        patch(f"{CENTER_MOD}.admin_audit_log_crud", **{
+            "create_only_no_commit": AsyncMock(),
+        }),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await evacuation_center_service.update_center(
+                db=_db(),
+                center_id=1,
+                payload=EvacuationCenterUpdate(capacity=200),
+                current_user=_admin(),
+            )
+
+    assert exc.value.status_code == 404
+    loc_crud.get_for_share.assert_awaited_once()
+
+
+async def test_delete_center_rejects_inactive_site():
+    center = SimpleNamespace(
+        id=1, location_id=SITE_B_ID, name="Evac Center",
+    )
+
+    with (
+        patch(f"{CENTER_MOD}.location_crud", **{
+            "get_for_share": AsyncMock(return_value=_location(is_active=False)),
+        }) as loc_crud,
+        patch(f"{CENTER_MOD}.evacuation_center_crud", **{
+            "get": AsyncMock(return_value=center),
+        }),
+        patch(f"{CENTER_MOD}.admin_audit_log_crud", **{
+            "create_only_no_commit": AsyncMock(),
+        }),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await evacuation_center_service.delete_center(
+                db=_db(), center_id=1, current_user=_admin(),
+            )
+
+    assert exc.value.status_code == 404
     loc_crud.get_for_share.assert_awaited_once()
 
 

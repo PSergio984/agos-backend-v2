@@ -216,8 +216,14 @@ class CRUDResponder(CRUDBase[None, None, None]):
         phone_number: str | None,
         location_id: int | None = None,
     ) -> Responder:
+        # FOR UPDATE: read-modify-write. Site-moving callers already hold the
+        # location FOR SHARE (lock order location → responder); the row lock
+        # serializes the location/active_location move against other
+        # responder-row writers (#29).
         result = await db.execute(
-            select(self.model).filter(self.model.id == responder_id)
+            select(self.model)
+            .filter(self.model.id == responder_id)
+            .with_for_update()
         )
         responder = result.scalars().first()
         if not responder:
