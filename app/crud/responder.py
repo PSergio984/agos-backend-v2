@@ -87,6 +87,29 @@ class CRUDResponder(CRUDBase[None, None, None]):
         return list(result.scalars().all())
 
 
+    async def get_reachable_ids(self, db: AsyncSession, responder_ids: list[UUID]) -> list[UUID]:
+
+        """Subset of the given responder IDs who can currently receive a send
+        — ACTIVE responders at an active effective site. The site-agnostic
+        counterpart of get_ids_in_effective_location for barangay-wide sends."""
+        if not responder_ids:
+            return []
+        result = await db.execute(
+            select(self.model.id)
+            .join(
+                Location,
+                Location.id
+                == func.coalesce(self.model.active_location_id, self.model.location_id),
+            )
+            .where(
+                self.model.id.in_(responder_ids),
+                self.model.status == ResponderStatus.ACTIVE,
+                Location.is_active,
+            )
+        )
+        return list(result.scalars().all())
+
+
     async def clear_active_site(self, db: AsyncSession, location_id: int) -> None:
         """Site deactivation cleanup — presence overrides pointing at the dead
         site clear so affected responders fall back to their home site."""

@@ -5,7 +5,6 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from pywebpush import webpush, WebPushException
-from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -48,15 +47,21 @@ class NotificationService:
 
         # Site-scoped dispatch: deliver only to responders whose effective site
         # (active_location_id ?? location_id) matches. A NULL location_id is a
-        # global announcement — the given ids are delivered regardless of site.
+        # global send — delivered regardless of site, but still only to
+        # reachable responders, so retries/escalations can't re-ping suspended
+        # responders or responders at deactivated sites.
         if location_id is not None:
             responder_ids = await responder_crud.get_ids_in_effective_location(
                 db=db,
                 responder_ids=responder_ids,
                 location_id=location_id,
             )
-            if not responder_ids:
-                return 0
+        else:
+            responder_ids = await responder_crud.get_reachable_ids(
+                db=db, responder_ids=responder_ids
+            )
+        if not responder_ids:
+            return 0
 
         notif_title, notif_message, notif_type = await self._resolve_notification_content(
             payload=payload,
@@ -187,7 +192,11 @@ class NotificationService:
         if not responder_ids:
             raise HTTPException(
                 status_code=400,
-                detail="No push-subscribed responders for this site",
+                detail=(
+                    "No push-subscribed responders for this site"
+                    if location_id is not None
+                    else "No push-subscribed responders"
+                ),
             )
 
         payload = SendNotificationSchema(
@@ -339,10 +348,10 @@ class NotificationService:
             if status == 410: # subscription is no longer valid
                 return PushResult.GONE
             return PushResult.FAILED
-        except RequestException:
-            # Transport failure (timeout, TLS, DNS) — pywebpush lets requests
-            # exceptions propagate unwrapped; a stale endpoint must fail its
-            # delivery row, not abort the rest of the fan-out.
+        except Exception:
+            # Any per-subscription failure — transport error, malformed stored
+            # keys, library internals — fails this delivery row, never aborts
+            # the rest of the fan-out.
             return PushResult.FAILED
 
 notification_service = NotificationService()

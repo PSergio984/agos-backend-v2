@@ -146,6 +146,11 @@ def _alarm_patches(site_ids):
                         i for i in responder_ids if i in site_ids
                     ]
                 ),
+                "get_reachable_ids": AsyncMock(
+                    side_effect=lambda db, responder_ids: [
+                        i for i in responder_ids if i in site_ids
+                    ]
+                ),
             },
         ),
         patch(
@@ -324,22 +329,24 @@ async def test_push_payload_marks_alarm_tier():
 
 
 async def test_send_push_transport_error_returns_failed():
-    """pywebpush lets requests transport errors propagate unwrapped — a stale
-    endpoint that hangs TLS must fail its delivery row, not abort fan-out."""
+    """pywebpush lets requests transport errors propagate unwrapped — and a
+    corrupt stored key raises during payload encryption before any POST. Both
+    must fail their delivery row, not abort fan-out."""
     subscription = MagicMock(endpoint="https://push.example/x", p256dh="k", auth="a")
 
-    with patch(
-        f"{NS_MODULE}.webpush",
-        side_effect=requests.exceptions.ConnectTimeout("stale endpoint"),
+    for exc in (
+        requests.exceptions.ConnectTimeout("stale endpoint"),
+        ValueError("malformed p256dh"),
     ):
-        result = await notification_service.send_push(
-            subscription=subscription,
-            notif_title="t",
-            notif_message="m",
-            notif_type=NotificationType.ALARM,
-        )
+        with patch(f"{NS_MODULE}.webpush", side_effect=exc):
+            result = await notification_service.send_push(
+                subscription=subscription,
+                notif_title="t",
+                notif_message="m",
+                notif_type=NotificationType.ALARM,
+            )
 
-    assert result == "failed"
+        assert result == "failed", exc
 
 
 async def test_send_push_does_not_block_event_loop():
@@ -468,10 +475,10 @@ async def test_send_alarm_returns_delivered_count():
 
 
 async def test_site_refilter_keeps_audience_hygiene():
-    """get_ids_in_effective_location is the send path's re-filter — escalation
-    re-sends go through it too, so it must apply the same status + active-site
-    filters as the resolver or a suspended responder keeps getting takeover
-    pings."""
+    """The send path's re-filters — site-scoped and barangay-wide — are what
+    escalation re-sends go through, so both must apply the same status +
+    active-site filters as the resolver or a suspended responder keeps
+    getting takeover pings."""
     from app.crud import responder_crud
 
     result = MagicMock()
@@ -482,11 +489,13 @@ async def test_site_refilter_keeps_audience_hygiene():
     await responder_crud.get_ids_in_effective_location(
         db=db, responder_ids=[uuid.uuid4()], location_id=SITE_A
     )
+    await responder_crud.get_reachable_ids(db=db, responder_ids=[uuid.uuid4()])
 
-    sql = str(db.execute.call_args.args[0])
-    assert "JOIN" in sql.upper()
-    assert "status" in sql
-    assert "is_active" in sql
+    for call in db.execute.call_args_list:
+        sql = str(call.args[0])
+        assert "JOIN" in sql.upper()
+        assert "status" in sql
+        assert "is_active" in sql
 
 
 async def test_admin_list_badge_uses_unfiltered_lookup():
