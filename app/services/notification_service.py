@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -22,6 +23,8 @@ from app.schemas.subscription import (
     CustomNotificationPayload,
     SendNotificationSchema,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PushResult:
@@ -353,7 +356,9 @@ class NotificationService:
         except Exception:
             # Any per-subscription failure — transport error, malformed stored
             # keys, library internals — fails this delivery row, never aborts
-            # the rest of the fan-out.
+            # the rest of the fan-out. Log so a systemic failure (bad VAPID
+            # config) isn't indistinguishable from stale endpoints.
+            logger.exception("Web push failed for endpoint %s", subscription.endpoint)
             return PushResult.FAILED
 
 notification_service = NotificationService()

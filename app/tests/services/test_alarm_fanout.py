@@ -349,6 +349,27 @@ async def test_send_push_transport_error_returns_failed():
         assert result == "failed", exc
 
 
+async def test_send_push_logs_swallowed_exception():
+    """PR #25 review: the per-subscription boundary swallows every exception —
+    a systemic failure (bad VAPID config) would be indistinguishable from
+    stale endpoints without the log."""
+    subscription = MagicMock(endpoint="https://push.example/x", p256dh="k", auth="a")
+
+    with (
+        patch(f"{NS_MODULE}.webpush", side_effect=ValueError("bad key")),
+        patch(f"{NS_MODULE}.logger") as log_mock,
+    ):
+        result = await notification_service.send_push(
+            subscription=subscription,
+            notif_title="t",
+            notif_message="m",
+            notif_type=NotificationType.ALARM,
+        )
+
+    assert result == "failed"
+    log_mock.exception.assert_called_once()
+
+
 async def test_send_push_does_not_block_event_loop():
     """webpush is a sync requests.post — inside send_alarm it runs while the
     FOR SHARE site lock is held. It must run off the event loop so other
