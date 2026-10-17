@@ -323,6 +323,10 @@ async def test_auto_notify_arms_retry_backoff_on_zero_delivery(monkeypatch):
     fusion = state_module.FusionAnalysisState(location_id=SITE_B)
     get_ids, send = _patch_state_send(monkeypatch, ids={uuid.uuid4()})
     send.return_value = 0
+    # monotonic() counts since boot on Linux — the 0 initial stamp suppresses
+    # the first send on a fresh CI runner. Backdate it past the cooldown so
+    # the first call always sends regardless of uptime.
+    fusion._last_critical_notify_time = -state_module.CRITICAL_NOTIFY_COOLDOWN_SECONDS
 
     await fusion._auto_notify_critical()
     assert send.await_count == 1
