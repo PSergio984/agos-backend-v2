@@ -94,15 +94,27 @@ class NotificationService:
 
         # Persist intent before any push leaves the process: a crash between
         # send and commit must not leave a responder holding an alarm with no
-        # durable dispatch/delivery to claim or acknowledge — and rows the
-        # escalation query can't see (PR #25 review). The upsert rewrites
-        # these FAILED placeholders with real outcomes after the fan-out.
-        # This commit also ends the transaction, releasing the FOR SHARE site
-        # lock before the push loop instead of holding it across N pushes.
+        # durable dispatch/delivery to claim or acknowledge (PR #25 review).
+        # Placeholders are PENDING, not FAILED — a stuck-in-flight row is
+        # distinguishable from a real failure and escalation still picks it
+        # up once it's stale. The final upsert rewrites them with real
+        # outcomes (the dict defaults above stay FAILED for no-subscription
+        # responders). This commit also ends the transaction, releasing the
+        # FOR SHARE site lock before the push loop instead of holding it
+        # across N pushes.
         await notification_delivery_crud.upsert_many_results(
             db=db,
             dispatch_id=dispatch.id,
-            delivery_rows=list(deliveries_by_responder.values()),
+            delivery_rows=[
+                {
+                    "responder_id": responder_id,
+                    "subscription_id": None,
+                    "status": DeliveryStatus.PENDING,
+                    "sent_at": None,
+                    "error_message": None,
+                }
+                for responder_id in responder_ids
+            ],
         )
 
         now = datetime.now(timezone.utc)

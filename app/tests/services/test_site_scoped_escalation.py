@@ -214,6 +214,26 @@ async def test_escalation_null_site_dispatch_escalates_to_everyone():
     )
 
 
+async def test_escalation_query_picks_up_stale_pending_rows():
+    """PR #25 review: pre-push intent rows are PENDING with sent_at=None.
+    A crash between push and outcome commit orphans one — the escalation
+    query must still reach it via created_at or the alarm dies silently."""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value.all.return_value = []
+    db.execute.return_value = result
+
+    await notification_delivery_crud.get_unacknowledged_critical_past_threshold(
+        db=db, timeout_minutes=10, max_escalation=3
+    )
+
+    stmt = db.execute.call_args.args[0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "in" in sql and "sent" in sql and "pending" in sql
+    assert "coalesce" in sql
+    assert "created_at" in sql
+
+
 # ---------------------------------------------------------------------------
 # #26 — the overdue query's claim semantics
 # ---------------------------------------------------------------------------
@@ -238,6 +258,7 @@ async def test_overdue_query_excludes_escalation_dispatches_and_claimed_rows():
     assert "is_escalation" in sql
     assert "coalesce" in sql.lower()
     assert "last_escalated_at" in sql
+    assert "created_at" in sql
     # Default dialect omits the SKIP LOCKED text — check the flag itself.
     assert stmt._for_update_arg.skip_locked is True
 

@@ -174,7 +174,13 @@ class CRUDNotificationDelivery(CRUDBase):
             .outerjoin(Acknowledgement, Acknowledgement.delivery_id == NotificationDelivery.id)
             .join(NotificationDispatch)
             .where(
-                NotificationDelivery.status == DeliveryStatus.SENT,
+                # SENT rows re-ping when unacked past the timeout; PENDING
+                # rows are send-intent placeholders orphaned by a crash
+                # mid-fan-out — their push may have landed, so they escalate
+                # too (at-most-one extra ping beats a silently dead alarm).
+                NotificationDelivery.status.in_(
+                    [DeliveryStatus.SENT, DeliveryStatus.PENDING]
+                ),
                 Acknowledgement.id.is_(None),
                 # ALARM is the critical-or-above tier: unacknowledged alarms
                 # escalate like criticals (#21/T8).
@@ -183,12 +189,14 @@ class CRUDNotificationDelivery(CRUDBase):
                 # alerts — without this they spawn another generation every
                 # run and an unacknowledged alert pings forever (#26).
                 NotificationDispatch.is_escalation.is_(False),
-                # last_escalated_at (not sent_at) bounds the cadence: rows
-                # re-qualify only a full timeout after their last claim, and
-                # a concurrent run can't re-select rows another run claimed.
+                # Eligibility ages off the last claim, then sent_at, then
+                # created_at: last_escalated_at bounds re-ping cadence for
+                # claimed rows, and created_at keeps crash-orphaned PENDING
+                # placeholders (sent_at=None) from sitting invisible forever.
                 func.coalesce(
                     NotificationDelivery.last_escalated_at,
                     NotificationDelivery.sent_at,
+                    NotificationDelivery.created_at,
                 ) < cutoff,
                 NotificationDelivery.escalation_count < max_escalation,
             )
