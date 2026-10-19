@@ -42,6 +42,7 @@ class NotificationService:
         *,
         system_initiated: bool = False,
         location_id: int | None = None,
+        is_escalation: bool = False,
     ) -> int:
 
         responder_ids = list(dict.fromkeys(payload.responder_ids))
@@ -77,6 +78,7 @@ class NotificationService:
             title=notif_title,
             message=notif_message,
             location_id=location_id,
+            is_escalation=is_escalation,
         )
 
         deliveries_by_responder: dict[UUID, dict] = {

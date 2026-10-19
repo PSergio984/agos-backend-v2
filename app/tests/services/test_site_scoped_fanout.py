@@ -34,9 +34,8 @@ from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.models.responder_related.responders import ResponderStatus
 from app.schemas.responder import ResponderOTPVerifyRequest
 from app.schemas.subscription import CustomNotificationPayload, SendNotificationSchema
-from app.services import notification_service as notification_service_instance
 from app.services.notification_log_service import notification_log_service
-from app.services.notification_service import notification_service
+from app.services.notification_service import NotificationService, notification_service
 from app.services.responder.responder_app_service import responder_app_service
 
 ADMIN_ID = uuid.uuid4()
@@ -267,9 +266,13 @@ def _patch_state_send(monkeypatch, ids):
     monkeypatch.setattr(
         responder_crud, "get_responder_ids_with_push_subscription", get_ids
     )
-    send = AsyncMock()
+    # The real send returns the SENT delivery count — the fusion cooldown
+    # arms on sent > 0. Patch the class, not the singleton instance:
+    # monkeypatch would restore a bound method as an instance attribute,
+    # permanently shadowing class-level patches in later tests.
+    send = AsyncMock(return_value=1)
     monkeypatch.setattr(
-        notification_service_instance, "send_notification_to_subscribers", send
+        NotificationService, "send_notification_to_subscribers", send
     )
     return get_ids, send
 
@@ -296,6 +299,47 @@ async def test_detection_send_returns_false_when_no_site_recipients(monkeypatch)
 
     assert ok is False
     send.assert_not_called()
+
+
+async def test_detection_send_returns_none_on_zero_deliveries(monkeypatch):
+    """PR #30 review: a send that reached nobody still wrote dispatch + FAILED
+    delivery rows. It must report the tri-state 'attempted, zero landed' — not
+    False (nothing sent) — so the caller can back off instead of either
+    re-stamping every tick or silencing for the full cooldown."""
+    fusion = state_module.FusionAnalysisState(location_id=SITE_B)
+    get_ids, send = _patch_state_send(monkeypatch, ids={uuid.uuid4()})
+    send.return_value = 0
+
+    ok = await fusion._send_system_template(NotificationType.CRITICAL, "[CRITICAL]")
+
+    assert ok is None
+
+
+async def test_auto_notify_arms_retry_backoff_on_zero_delivery(monkeypatch):
+    """A push outage must not stamp a fresh dispatch batch on every fusion
+    tick (the pre-fix behavior would) nor silence the alert for the whole
+    cooldown. Zero-delivery arms the short retry backoff: a second call inside
+    the window skips; once it elapses the send retries."""
+    fusion = state_module.FusionAnalysisState(location_id=SITE_B)
+    get_ids, send = _patch_state_send(monkeypatch, ids={uuid.uuid4()})
+    send.return_value = 0
+    # monotonic() counts since boot on Linux — the 0 initial stamp suppresses
+    # the first send on a fresh CI runner. Backdate it past the cooldown so
+    # the first call always sends regardless of uptime.
+    fusion._last_critical_notify_time = -state_module.CRITICAL_NOTIFY_COOLDOWN_SECONDS
+
+    await fusion._auto_notify_critical()
+    assert send.await_count == 1
+
+    # Inside the backoff window — no new send.
+    await fusion._auto_notify_critical()
+    assert send.await_count == 1
+
+    # Backoff elapsed — the alert retries rather than waiting out the full
+    # CRITICAL cooldown.
+    fusion._last_critical_notify_time -= state_module.NOTIFY_RETRY_SECONDS
+    await fusion._auto_notify_critical()
+    assert send.await_count == 2
 
 
 # ---------------------------------------------------------------------------

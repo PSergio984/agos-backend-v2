@@ -32,6 +32,16 @@ async def escalation_check_job():
             if not overdue:
                 return
 
+            # Claim BEFORE sending: the count bump + last_escalated_at stamp
+            # commit while the FOR UPDATE locks are still held, so an
+            # overlapping run can neither see the rows (SKIP LOCKED) nor
+            # re-select them after this commit (fresh claim timestamp). A
+            # crash after this point loses the ping — acceptable: a missed
+            # re-ping beats the duplicate pings the old order produced (#26).
+            await notification_delivery_crud.mark_escalated(
+                db=db, delivery_ids=[d.id for d in overdue]
+            )
+
             # Group overdue deliveries by their dispatch's (site, tier): a
             # site-scoped dispatch escalates only to that site's responders, a
             # NULL-site dispatch to everyone, and the escalation ping keeps the
@@ -76,15 +86,14 @@ async def escalation_check_job():
                     db=db,
                     system_initiated=True,
                     location_id=location_id,
+                    # The spawned dispatch is an escalation ping — its own
+                    # deliveries must never re-escalate (#26).
+                    is_escalation=True,
                 )
                 print(
                     f"⚡ Escalated {len(group_deliveries)} overdue delivery(ies) "
                     f"to {len(responder_ids)} responder(s) at {site_name or 'all sites'}"
                 )
-
-            # Increment escalation count for all overdue deliveries
-            for delivery in overdue:
-                await notification_delivery_crud.increment_escalation_count(db=db, delivery_id=delivery.id)
 
             print(f"⚡ Escalation run complete: {len(overdue)} delivery(ies) escalated across {len(deliveries_by_group)} site(s)")
 

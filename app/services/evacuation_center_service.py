@@ -74,6 +74,15 @@ class EvacuationCenterService:
         if not changes:
             return EvacuationCenterResponse.model_validate(existing)
 
+        # Same gate as create_center: no writes on a deactivated site, and the
+        # FOR SHARE read serializes against a concurrent deactivation commit.
+        site = await location_crud.get_for_share(db=db, id=existing.location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Site not found or inactive.",
+            )
+
         previous_status = existing.status.value if hasattr(existing.status, "value") else existing.status
         try:
             updated = await evacuation_center_crud.update(db=db, db_obj=existing, obj_in=payload)
@@ -106,6 +115,12 @@ class EvacuationCenterService:
         if not existing:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Evacuation center not found."
+            )
+        site = await location_crud.get_for_share(db=db, id=existing.location_id)
+        if site is None or not site.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Site not found or inactive.",
             )
         name = existing.name
         await db.delete(existing)
