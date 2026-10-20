@@ -238,7 +238,7 @@ async def main() -> None:
                 r.status = ResponderStatus.ACTIVE
                 r.location_id = site.id
             responders.append(r)
-            print(f"responder: id={r.id} phone={r.phone_number} status={r.status.value}")
+            print(f"responder: id={r.id} name={r.first_name} {r.last_name} status={r.status.value}")
 
         # One open deployment per responder (uq_responder_deployments_one_open
         # enforces a single open deployment) — responders cycle over the extra
