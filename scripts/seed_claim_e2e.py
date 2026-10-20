@@ -29,7 +29,7 @@ from sqlalchemy import select
 
 sys.path.insert(0, ".")
 from app.core.database import AsyncSessionLocal  # noqa: E402
-from app.core.security import create_responder_token, get_password_hash  # noqa: E402
+from app.core.security import get_password_hash  # noqa: E402
 from app.models import AdminUser, Location, Responder  # noqa: E402
 from app.models.data_sources.camera_device import CameraDevice  # noqa: E402
 from app.models.data_sources.model_readings import ModelReadings  # noqa: E402
@@ -292,7 +292,7 @@ async def main() -> None:
         print("\n--- smoke inputs ---")
         for (first, last), r in zip(NAMES, responders):
             print(f"{first} {last}: {r.id}")
-            print(f"  token: {create_responder_token(str(r.id))}")
+        print("(mint tokens ad hoc with create_responder_token — don't print them)")
         for label, did in dispatch_ids:
             print(f"dispatch[{label}]: {did}")
 
