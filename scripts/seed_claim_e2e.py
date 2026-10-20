@@ -245,15 +245,21 @@ async def main() -> None:
         # sites, so the two accounts land on different extra sites.
         for i, r in enumerate(responders):
             s = sites[1 + (i % (len(sites) - 1))]
+            # The unique index caps each responder at ONE open deployment —
+            # match on responder alone, not responder+location, or a stale
+            # open deployment elsewhere would make the insert below explode.
             existing_dep = (
                 await db.execute(
                     select(ResponderDeployment).where(
                         ResponderDeployment.responder_id == r.id,
-                        ResponderDeployment.location_id == s.id,
                         ResponderDeployment.ends_at.is_(None),
                     )
                 )
             ).scalar_one_or_none()
+            if existing_dep is not None and existing_dep.location_id != s.id:
+                existing_dep.ends_at = datetime.now(timezone.utc)
+                await db.flush()
+                existing_dep = None
             if existing_dep is None:
                 db.add(
                     ResponderDeployment(
