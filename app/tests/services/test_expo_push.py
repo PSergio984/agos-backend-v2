@@ -21,6 +21,7 @@ Invariants under test (#33):
 """
 
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -372,6 +373,35 @@ async def test_expo_alarm_payload_carries_siren_channel():
     assert body["priority"] == "high"
     assert body["ttl"] == 3600
     assert body["data"] == {"type": "alarm"}
+
+
+async def test_expo_alarm_payload_carries_nse_contract():
+    """Locked contract (#36): mutableContent + data.alarm give a future NSE
+    (and today's tap-routing) the dispatch metadata it needs."""
+    post = AsyncMock(return_value=_expo_response(data={"data": {"status": "ok"}}))
+    patcher, client = _httpx_patch(post)
+    dispatch = MagicMock(id=42, location_id=7)
+    dispatch.created_at = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+
+    with patcher:
+        result = await notification_service.send_expo_push(
+            client=client,
+            push_token=_token_row(),
+            notif_title="FLOOD ALARM",
+            notif_message="Evacuate now",
+            notif_type=NotificationType.ALARM,
+            dispatch=dispatch,
+        )
+
+    assert result == PushResult.SENT
+    body = post.call_args.kwargs["json"]
+    assert body["mutableContent"] is True
+    assert body["data"]["alarm"] == {
+        "id": 42,
+        "severity": "alarm",
+        "location_id": 7,
+        "issuedAt": "2026-03-01T12:00:00+00:00",
+    }
 
 
 async def test_expo_non_alarm_payload_stays_on_default_channel():
