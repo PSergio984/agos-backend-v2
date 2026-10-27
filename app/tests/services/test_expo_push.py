@@ -144,20 +144,51 @@ def _expo_sub(token="ExponentPushToken[x]", responder_id=None):
 
 async def test_subscribe_expo_dedupes_existing_token():
     data = _expo_sub()
+    existing = MagicMock()
+    existing.responder_id = data.responder_id
     # patch.object on the singleton: "create" is a Mock constructor kwarg, so
     # patch(target, create=...) would swallow it instead of setting the attr.
     with (
         patch.object(
             push_token_crud,
-            "get_by_responder_id",
-            new=AsyncMock(return_value=MagicMock()),
+            "get_by_token",
+            new=AsyncMock(return_value=existing),
         ) as get_mock,
         patch.object(push_token_crud, "create", new=AsyncMock()) as create_mock,
+        patch.object(
+            push_token_crud, "reassign", new=AsyncMock()
+        ) as reassign_mock,
     ):
         await push_subscription_service.subscribe_expo(data=data, db=AsyncMock())
 
     assert get_mock.call_args.kwargs["token"] == data.token
     create_mock.assert_not_awaited()
+    reassign_mock.assert_not_awaited()
+
+
+async def test_subscribe_expo_reassigns_token_to_new_responder():
+    """A token identifies the install, not the responder — on a shared
+    device, subscribing under a different responder must move the row, or
+    the previous owner's alarms keep ringing this phone."""
+    data = _expo_sub()
+    existing = MagicMock()
+    existing.responder_id = uuid.uuid4()
+    with (
+        patch.object(
+            push_token_crud,
+            "get_by_token",
+            new=AsyncMock(return_value=existing),
+        ),
+        patch.object(push_token_crud, "create", new=AsyncMock()) as create_mock,
+        patch.object(
+            push_token_crud, "reassign", new=AsyncMock()
+        ) as reassign_mock,
+    ):
+        await push_subscription_service.subscribe_expo(data=data, db=AsyncMock())
+
+    create_mock.assert_not_awaited()
+    reassign_mock.assert_awaited_once()
+    assert reassign_mock.call_args.kwargs["responder_id"] == data.responder_id
 
 
 async def test_subscribe_expo_creates_when_token_is_new():
@@ -165,7 +196,7 @@ async def test_subscribe_expo_creates_when_token_is_new():
     with (
         patch.object(
             push_token_crud,
-            "get_by_responder_id",
+            "get_by_token",
             new=AsyncMock(return_value=None),
         ),
         patch.object(push_token_crud, "create", new=AsyncMock()) as create_mock,
@@ -209,6 +240,7 @@ async def test_expo_send_ok_ticket_is_sent():
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",
@@ -236,10 +268,11 @@ async def test_expo_device_not_registered_is_gone():
             }
         )
     )
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",
@@ -261,10 +294,11 @@ async def test_expo_other_ticket_error_is_failed():
             }
         )
     )
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",
@@ -276,10 +310,11 @@ async def test_expo_other_ticket_error_is_failed():
 
 async def test_expo_non_200_is_failed():
     post = AsyncMock(return_value=_expo_response(status_code=500))
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",
@@ -294,10 +329,11 @@ async def test_expo_transport_error_is_failed_and_logged():
     this delivery row, never aborts the fan-out — and is logged so a systemic
     failure isn't indistinguishable from stale tokens."""
     post = AsyncMock(side_effect=ValueError("boom"))
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher, patch(f"{NS_MODULE}.logger") as log_mock:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",
@@ -317,10 +353,11 @@ async def test_expo_alarm_payload_carries_siren_channel():
     """The takeover UI's audible layer: ALARM rides the app's "alarm" channel
     with the bundled siren at timeSensitive interruption."""
     post = AsyncMock(return_value=_expo_response(data={"data": {"status": "ok"}}))
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="FLOOD ALARM",
             notif_message="Evacuate now",
@@ -339,10 +376,11 @@ async def test_expo_alarm_payload_carries_siren_channel():
 
 async def test_expo_non_alarm_payload_stays_on_default_channel():
     post = AsyncMock(return_value=_expo_response(data={"data": {"status": "ok"}}))
-    patcher, _client = _httpx_patch(post)
+    patcher, client = _httpx_patch(post)
 
     with patcher:
         result = await notification_service.send_expo_push(
+            client=client,
             push_token=_token_row(),
             notif_title="t",
             notif_message="m",

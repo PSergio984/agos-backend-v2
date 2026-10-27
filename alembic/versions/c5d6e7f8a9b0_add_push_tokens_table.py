@@ -33,7 +33,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text("timezone('UTC', now())"), nullable=False),
     sa.ForeignKeyConstraint(['responder_id'], ['responders.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('responder_id', 'token', name='uq_push_token_responder_token')
+    sa.UniqueConstraint('token', name='uq_push_token_token')
     )
 
 

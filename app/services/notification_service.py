@@ -158,16 +158,29 @@ class NotificationService:
                 now=now,
             )
 
-        for push_token in push_tokens:
-            if push_token.responder_id not in deliveries_by_responder:
-                continue
-
-            result = await self.send_expo_push(
-                push_token=push_token,
-                notif_title=notif_title,
-                notif_message=notif_message,
-                notif_type=notif_type,
-            )
+        expo_tokens = [
+            push_token
+            for push_token in push_tokens
+            if push_token.responder_id in deliveries_by_responder
+        ]
+        expo_results: list[PushResult] = []
+        if expo_tokens:
+            # One client for the whole fan-out, sends concurrent — a slow
+            # Expo response must not stall every responder behind it.
+            async with httpx.AsyncClient(timeout=10) as client:
+                expo_results = await asyncio.gather(
+                    *(
+                        self.send_expo_push(
+                            client=client,
+                            push_token=push_token,
+                            notif_title=notif_title,
+                            notif_message=notif_message,
+                            notif_type=notif_type,
+                        )
+                        for push_token in expo_tokens
+                    )
+                )
+        for push_token, result in zip(expo_tokens, expo_results):
             if result == PushResult.GONE:
                 tokens_to_remove.append(push_token)
             self._apply_delivery_result(
@@ -436,12 +449,13 @@ class NotificationService:
         }
 
 
-    async def send_expo_push(self, push_token: PushToken, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
+    async def send_expo_push(self, client: httpx.AsyncClient, push_token: PushToken, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
 
         """Expo Push Service sender — the native app's counterpart of
         send_push. One push per request so the ticket maps 1:1 onto
         PushResult: status "ok" → SENT, a DeviceNotRegistered ticket error →
-        GONE (the token gets pruned), everything else → FAILED."""
+        GONE (the token gets pruned), everything else → FAILED. Callers share
+        one client across the fan-out."""
         # ALARM rides the app's "alarm" channel with the bundled siren — the
         # channelId/sound/interruptionLevel triple is what makes the takeover
         # UI audible through focus/DND. Other tiers stay on the default
@@ -463,8 +477,7 @@ class NotificationService:
             payload["interruptionLevel"] = "timeSensitive"
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(EXPO_PUSH_URL, json=payload)
+            response = await client.post(EXPO_PUSH_URL, json=payload)
             if response.status_code != 200:
                 return PushResult.FAILED
             ticket = response.json().get("data") or {}

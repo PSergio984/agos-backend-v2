@@ -7,15 +7,19 @@ from uuid import UUID
 
 class CRUDPushToken(CRUDBase):
 
-    async def get_by_responder_id(self, responder_id: UUID, token: str, db: AsyncSession) -> PushToken | None:
+    async def get_by_token(self, token: str, db: AsyncSession) -> PushToken | None:
 
         result = await db.execute(
-            select(self.model).filter_by(
-                responder_id=responder_id,
-                token=token
-            )
+            select(self.model).filter_by(token=token)
         )
         return result.scalar_one_or_none()
+
+
+    async def reassign(self, push_token: PushToken, responder_id: UUID, platform: str, db: AsyncSession) -> None:
+
+        push_token.responder_id = responder_id
+        push_token.platform = platform
+        await db.commit()
 
 
     async def create(self, data: ExpoSubscriptionSchema, db: AsyncSession) -> None:
