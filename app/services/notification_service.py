@@ -18,6 +18,7 @@ from app.crud import (
     push_token_crud,
     responder_crud,
 )
+from app.models.notification_dispatch import NotificationDispatch
 from app.models.notification_template import NotificationTemplate, NotificationType
 from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.models.responder_related.push_subscription import PushSubscription
@@ -176,6 +177,7 @@ class NotificationService:
                             notif_title=notif_title,
                             notif_message=notif_message,
                             notif_type=notif_type,
+                            dispatch=dispatch,
                         )
                         for push_token in expo_tokens
                     )
@@ -449,7 +451,7 @@ class NotificationService:
         }
 
 
-    async def send_expo_push(self, client: httpx.AsyncClient, push_token: PushToken, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
+    async def send_expo_push(self, client: httpx.AsyncClient, push_token: PushToken, notif_title: str, notif_message: str, notif_type: NotificationType, dispatch: NotificationDispatch | None = None) -> PushResult:
 
         """Expo Push Service sender — the native app's counterpart of
         send_push. One push per request so the ticket maps 1:1 onto
@@ -475,6 +477,21 @@ class NotificationService:
         }
         if is_alarm:
             payload["interruptionLevel"] = "timeSensitive"
+            if dispatch is not None:
+                # Locked push contract (#36): mutableContent → APNs
+                # mutable-content:1 lets a future Notification Service
+                # Extension upgrade the alert (AlarmKit path), and data.alarm
+                # carries the metadata it + tap-routing need — the app
+                # resolves dispatch id → its delivery row to acknowledge.
+                payload["mutableContent"] = True
+                payload["data"]["alarm"] = {
+                    "id": dispatch.id,
+                    "severity": notif_type.value,
+                    "location_id": dispatch.location_id,
+                    "issuedAt": (
+                        dispatch.created_at or datetime.now(timezone.utc)
+                    ).isoformat(),
+                }
 
         try:
             response = await client.post(EXPO_PUSH_URL, json=payload)
