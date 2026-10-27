@@ -1,9 +1,10 @@
 from app.crud.base import CRUDBase
 from fastapi import HTTPException
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from app.models import Location, Responder
 from app.models.responder_related.push_subscription import PushSubscription
+from app.models.responder_related.push_token import PushToken
 from app.models.responder_related.responders import ResponderStatus
 from datetime import datetime, timezone
 from sqlalchemy.orm import joinedload, selectinload
@@ -25,13 +26,24 @@ class CRUDResponder(CRUDBase[None, None, None]):
 
     async def get_responder_ids_with_push_subscription(self, db: AsyncSession, location_id: int | None = None) -> set[UUID]:
 
-        """Returns responder IDs that have at least one push subscription. Lightweight query, no relationship load.
-        Only ACTIVE responders whose effective site is active — a non-active responder
-        or a deactivated site must not receive fan-out. When location_id is given,
-        only responders whose effective site matches are returned."""
+        """Returns responder IDs reachable by push: at least one web-push
+        subscription OR one native (Expo) push token. Lightweight query, no
+        relationship load. Only ACTIVE responders whose effective site is
+        active — a non-active responder or a deactivated site must not receive
+        fan-out. When location_id is given, only responders whose effective
+        site matches are returned."""
+        has_web_sub = exists(
+            select(PushSubscription.responder_id).where(
+                PushSubscription.responder_id == Responder.id
+            )
+        )
+        has_expo_token = exists(
+            select(PushToken.responder_id).where(
+                PushToken.responder_id == Responder.id
+            )
+        )
         stmt = (
-            select(PushSubscription.responder_id)
-            .join(Responder, Responder.id == PushSubscription.responder_id)
+            select(Responder.id)
             .join(
                 Location,
                 Location.id
@@ -40,6 +52,7 @@ class CRUDResponder(CRUDBase[None, None, None]):
             .where(
                 Responder.status == ResponderStatus.ACTIVE,
                 Location.is_active,
+                or_(has_web_sub, has_expo_token),
             )
             .distinct()
         )

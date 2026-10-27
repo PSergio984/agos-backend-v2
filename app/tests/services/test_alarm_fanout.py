@@ -163,6 +163,10 @@ def _alarm_patches(site_ids):
             **{"get_by_responder_ids": AsyncMock(return_value=[])},
         ),
         patch(
+            f"{NS_MODULE}.push_token_crud",
+            **{"get_by_responder_ids": AsyncMock(return_value=[])},
+        ),
+        patch(
             f"{NS_MODULE}.notification_delivery_crud",
             **{"upsert_many_results": AsyncMock()},
         ),
@@ -175,9 +179,9 @@ def _alarm_patches(site_ids):
 
 async def test_send_alarm_creates_alarm_tier_dispatch_scoped_to_site():
     at_site = uuid.uuid4()
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({at_site})
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches({at_site})
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock, gate as gate_mock:
+    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_tok, crud_del as del_mock, gate as gate_mock:
         sent = await notification_service.send_alarm(
             db=AsyncMock(),
             location_id=SITE_A,
@@ -214,9 +218,9 @@ async def test_send_alarm_creates_alarm_tier_dispatch_scoped_to_site():
 
 async def test_send_alarm_null_site_fans_out_barangay_wide():
     ids = {uuid.uuid4(), uuid.uuid4()}
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches(ids)
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches(ids)
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock, gate as gate_mock:
+    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_tok, crud_del as del_mock, gate as gate_mock:
         sent = await notification_service.send_alarm(
             db=AsyncMock(), location_id=None, title="t", message="m"
         )
@@ -237,9 +241,9 @@ async def test_send_alarm_null_site_fans_out_barangay_wide():
 
 
 async def test_send_alarm_no_site_responders_creates_no_dispatch():
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches(set())
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches(set())
 
-    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock, gate:
+    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_tok, crud_del as del_mock, gate:
         with pytest.raises(HTTPException) as exc:
             await notification_service.send_alarm(
                 db=AsyncMock(), location_id=SITE_B, title="t", message="m"
@@ -258,7 +262,7 @@ async def test_send_alarm_persists_intent_before_any_push_leaves():
     rows must commit before the first send_push, then upsert real outcomes."""
     rid = uuid.uuid4()
     sub = MagicMock(responder_id=rid, endpoint="https://push/x", p256dh="k", auth="a")
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({rid})
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches({rid})
     order = []
 
     async def record_upsert(**kwargs):
@@ -268,7 +272,7 @@ async def test_send_alarm_persists_intent_before_any_push_leaves():
         order.append("push")
         return "sent"
 
-    with crud_r, crud_d, crud_sub as sub_mock, crud_del as del_mock, gate:
+    with crud_r, crud_d, crud_sub as sub_mock, crud_tok, crud_del as del_mock, gate:
         sub_mock.get_by_responder_ids.return_value = [sub]
         del_mock.upsert_many_results.side_effect = record_upsert
         with patch.object(
@@ -292,9 +296,9 @@ async def test_send_alarm_inactive_site_raises_before_resolving():
     """The service-level gate is the guard for every caller, including the
     deferred autonomous trigger — an alarm to an inactive site never
     reaches the resolver."""
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({uuid.uuid4()})
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches({uuid.uuid4()})
 
-    with crud_r as r_mock, crud_d, crud_sub, crud_del, patch(
+    with crud_r as r_mock, crud_d, crud_sub, crud_tok, crud_del, patch(
         "app.services.location_service.require_active_site",
         AsyncMock(side_effect=HTTPException(status_code=400, detail="Site is inactive.")),
     ):
@@ -515,14 +519,14 @@ async def test_send_alarm_returns_delivered_count():
     """sent_count counts responders a push actually reached — the resolver's
     audience only bounds it."""
     at_site = uuid.uuid4()
-    crud_r, crud_d, crud_sub, crud_del, gate = _alarm_patches({at_site})
+    crud_r, crud_d, crud_sub, crud_tok, crud_del, gate = _alarm_patches({at_site})
     subscription = MagicMock(
         responder_id=at_site, id=uuid.uuid4(),
         endpoint="https://push.example/x", p256dh="k", auth="a",
     )
 
     with (
-        crud_r, crud_d, crud_sub as sub_mock, crud_del, gate,
+        crud_r, crud_d, crud_sub as sub_mock, crud_tok, crud_del, gate,
         patch(f"{NS_MODULE}.webpush"),
     ):
         sub_mock.get_by_responder_ids.return_value = [subscription]

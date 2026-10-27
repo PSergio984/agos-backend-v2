@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
+import httpx
 from fastapi import HTTPException
 from pywebpush import webpush, WebPushException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,17 +15,21 @@ from app.crud import (
     notification_dispatch_crud,
     notification_template_crud,
     push_subscription_crud,
+    push_token_crud,
     responder_crud,
 )
 from app.models.notification_template import NotificationTemplate, NotificationType
 from app.models.responder_related.notification_delivery import DeliveryStatus
 from app.models.responder_related.push_subscription import PushSubscription
+from app.models.responder_related.push_token import PushToken
 from app.schemas.subscription import (
     CustomNotificationPayload,
     SendNotificationSchema,
 )
 
 logger = logging.getLogger(__name__)
+
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 
 class PushResult:
@@ -119,8 +124,15 @@ class NotificationService:
 
         now = datetime.now(timezone.utc)
         subscriptions_to_remove: list[PushSubscription] = []
+        tokens_to_remove: list[PushToken] = []
 
         subscriptions = await push_subscription_crud.get_by_responder_ids(
+            responder_ids=responder_ids,
+            db=db,
+        )
+        # Expo tokens are the same fan-out, second device table: a responder
+        # may carry VAPID subs (PWA) and Expo tokens (native app) at once.
+        push_tokens = await push_token_crud.get_by_responder_ids(
             responder_ids=responder_ids,
             db=db,
         )
@@ -135,44 +147,55 @@ class NotificationService:
                 notif_message=notif_message,
                 notif_type=notif_type,
             )
-            current = deliveries_by_responder[subscription.responder_id]
-
             if result == PushResult.GONE:
                 subscriptions_to_remove.append(subscription)
-                if current["status"] == DeliveryStatus.SENT:
-                    continue
-                deliveries_by_responder[subscription.responder_id] = {
-                    "responder_id": subscription.responder_id,
-                    "subscription_id": None,
-                    "status": DeliveryStatus.FAILED,
-                    "sent_at": None,
-                    "error_message": "Push subscription expired or unsubscribed",
-                }
-                continue
+            self._apply_delivery_result(
+                deliveries_by_responder,
+                subscription.responder_id,
+                result=result,
+                subscription_id=subscription.id,
+                gone_error="Push subscription expired or unsubscribed",
+                now=now,
+            )
 
-            if result == PushResult.SENT:
-                deliveries_by_responder[subscription.responder_id] = {
-                    "responder_id": subscription.responder_id,
-                    "subscription_id": subscription.id,
-                    "status": DeliveryStatus.SENT,
-                    "sent_at": now,
-                    "error_message": None,
-                }
-                continue
-
-            if current["status"] == DeliveryStatus.SENT:
-                continue
-
-            deliveries_by_responder[subscription.responder_id] = {
-                "responder_id": subscription.responder_id,
-                "subscription_id": subscription.id,
-                "status": DeliveryStatus.FAILED,
-                "sent_at": None,
-                "error_message": "Push delivery failed",
-            }
+        expo_tokens = [
+            push_token
+            for push_token in push_tokens
+            if push_token.responder_id in deliveries_by_responder
+        ]
+        expo_results: list[PushResult] = []
+        if expo_tokens:
+            # One client for the whole fan-out, sends concurrent — a slow
+            # Expo response must not stall every responder behind it.
+            async with httpx.AsyncClient(timeout=10) as client:
+                expo_results = await asyncio.gather(
+                    *(
+                        self.send_expo_push(
+                            client=client,
+                            push_token=push_token,
+                            notif_title=notif_title,
+                            notif_message=notif_message,
+                            notif_type=notif_type,
+                        )
+                        for push_token in expo_tokens
+                    )
+                )
+        for push_token, result in zip(expo_tokens, expo_results):
+            if result == PushResult.GONE:
+                tokens_to_remove.append(push_token)
+            self._apply_delivery_result(
+                deliveries_by_responder,
+                push_token.responder_id,
+                result=result,
+                subscription_id=None,
+                gone_error="Push token expired or device unregistered",
+                now=now,
+            )
 
         for sub in subscriptions_to_remove:
             await db.delete(sub)
+        for push_token in tokens_to_remove:
+            await db.delete(push_token)
 
         await notification_delivery_crud.upsert_many_results(
             db=db,
@@ -385,6 +408,88 @@ class NotificationService:
             # the rest of the fan-out. Log so a systemic failure (bad VAPID
             # config) isn't indistinguishable from stale endpoints.
             logger.exception("Web push failed for endpoint %s", subscription.endpoint)
+            return PushResult.FAILED
+
+
+    @staticmethod
+    def _apply_delivery_result(
+        deliveries_by_responder: dict[UUID, dict],
+        responder_id: UUID,
+        *,
+        result: PushResult,
+        subscription_id: UUID | None,
+        gone_error: str,
+        now: datetime,
+    ) -> None:
+        """Fold one device's send outcome into the responder's delivery row.
+
+        A responder can carry several devices (VAPID subs + Expo tokens):
+        SENT on any device is terminal for the row — a sibling device's
+        GONE/FAILED never downgrades it. GONE rows keep subscription_id NULL
+        since the device row is about to be deleted."""
+        if result == PushResult.SENT:
+            deliveries_by_responder[responder_id] = {
+                "responder_id": responder_id,
+                "subscription_id": subscription_id,
+                "status": DeliveryStatus.SENT,
+                "sent_at": now,
+                "error_message": None,
+            }
+            return
+
+        if deliveries_by_responder[responder_id]["status"] == DeliveryStatus.SENT:
+            return
+
+        deliveries_by_responder[responder_id] = {
+            "responder_id": responder_id,
+            "subscription_id": None if result == PushResult.GONE else subscription_id,
+            "status": DeliveryStatus.FAILED,
+            "sent_at": None,
+            "error_message": gone_error if result == PushResult.GONE else "Push delivery failed",
+        }
+
+
+    async def send_expo_push(self, client: httpx.AsyncClient, push_token: PushToken, notif_title: str, notif_message: str, notif_type: NotificationType) -> PushResult:
+
+        """Expo Push Service sender — the native app's counterpart of
+        send_push. One push per request so the ticket maps 1:1 onto
+        PushResult: status "ok" → SENT, a DeviceNotRegistered ticket error →
+        GONE (the token gets pruned), everything else → FAILED. Callers share
+        one client across the fan-out."""
+        # ALARM rides the app's "alarm" channel with the bundled siren — the
+        # channelId/sound/interruptionLevel triple is what makes the takeover
+        # UI audible through focus/DND. Other tiers stay on the default
+        # channel/sound and carry no interruptionLevel.
+        is_alarm = notif_type == NotificationType.ALARM
+        payload = {
+            "to": push_token.token,
+            "title": notif_title,
+            "body": notif_message,
+            "sound": "siren.wav" if is_alarm else "default",
+            "channelId": "alarm" if is_alarm else "default",
+            "priority": "high",
+            "ttl": 3600,
+            # "type" mirrors the webpush data payload — the app renders the
+            # tiered UI straight off the push.
+            "data": {"type": notif_type.value},
+        }
+        if is_alarm:
+            payload["interruptionLevel"] = "timeSensitive"
+
+        try:
+            response = await client.post(EXPO_PUSH_URL, json=payload)
+            if response.status_code != 200:
+                return PushResult.FAILED
+            ticket = response.json().get("data") or {}
+            if ticket.get("status") == "ok":
+                return PushResult.SENT
+            if (ticket.get("details") or {}).get("error") == "DeviceNotRegistered":
+                return PushResult.GONE
+            return PushResult.FAILED
+        except Exception:
+            # Same per-device boundary as send_push: transport errors and
+            # malformed tickets fail this delivery row, never the fan-out.
+            logger.exception("Expo push failed for token %s", push_token.token)
             return PushResult.FAILED
 
 notification_service = NotificationService()

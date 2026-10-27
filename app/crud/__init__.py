@@ -14,6 +14,7 @@ from .system_settings import system_settings_crud
 from .weather import weather_crud
 from .refresh_token import refresh_token_crud
 from .push_subscription import push_subscription_crud
+from .push_token import push_token_crud
 from .notification_delivery import notification_delivery_crud
 from .notification_dispatch import notification_dispatch_crud
 from .notification_template import notification_template_crud

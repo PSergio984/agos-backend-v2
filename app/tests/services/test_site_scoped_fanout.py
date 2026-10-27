@@ -132,6 +132,10 @@ def _send_patches(site_ids=None):
             **{"get_by_responder_ids": AsyncMock(return_value=[])},
         ),
         patch(
+            f"{NS_MODULE}.push_token_crud",
+            **{"get_by_responder_ids": AsyncMock(return_value=[])},
+        ),
+        patch(
             f"{NS_MODULE}.notification_delivery_crud",
             **{"upsert_many_results": AsyncMock()},
         ),
@@ -142,9 +146,9 @@ async def test_site_scoped_dispatch_delivers_only_to_matching_site():
     home_a = uuid.uuid4()          # home site A, no deployment -> effective A
     home_b = uuid.uuid4()          # effective site B -> excluded
     deployed_b = uuid.uuid4()      # home A but active_location_id B -> excluded
-    crud_r, crud_d, crud_sub, crud_del = _send_patches(site_ids=[home_a])
+    crud_r, crud_d, crud_sub, crud_tok, crud_del = _send_patches(site_ids=[home_a])
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock:
+    with crud_r as r_mock, crud_d as d_mock, crud_sub as sub_mock, crud_tok, crud_del as del_mock:
         await notification_service.send_notification_to_subscribers(
             payload=_payload([home_a, home_b, deployed_b]),
             db=AsyncMock(),
@@ -169,9 +173,9 @@ async def test_site_scoped_dispatch_delivers_only_to_matching_site():
 
 async def test_null_site_dispatch_delivers_to_all_given_ids():
     ids = [uuid.uuid4(), uuid.uuid4()]
-    crud_r, crud_d, crud_sub, crud_del = _send_patches()
+    crud_r, crud_d, crud_sub, crud_tok, crud_del = _send_patches()
 
-    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_del as del_mock:
+    with crud_r as r_mock, crud_d as d_mock, crud_sub, crud_tok, crud_del as del_mock:
         await notification_service.send_notification_to_subscribers(
             payload=_payload(ids, notif_type=NotificationType.ANNOUNCEMENT),
             db=AsyncMock(),
@@ -187,9 +191,9 @@ async def test_null_site_dispatch_delivers_to_all_given_ids():
 
 
 async def test_site_scoped_dispatch_with_no_matching_responders_skips_dispatch():
-    crud_r, crud_d, crud_sub, crud_del = _send_patches(site_ids=[])
+    crud_r, crud_d, crud_sub, crud_tok, crud_del = _send_patches(site_ids=[])
 
-    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_del as del_mock:
+    with crud_r, crud_d as d_mock, crud_sub as sub_mock, crud_tok, crud_del as del_mock:
         await notification_service.send_notification_to_subscribers(
             payload=_payload([uuid.uuid4()]),
             db=AsyncMock(),

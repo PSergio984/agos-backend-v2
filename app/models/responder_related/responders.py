@@ -74,3 +74,4 @@ class Responder(Base):
     acknowledgements = relationship("Acknowledgement", back_populates="responder", cascade="all, delete-orphan")
     deliveries = relationship("NotificationDelivery", back_populates="responder", cascade="all, delete-orphan")
     push_subscriptions = relationship("PushSubscription", back_populates="responder", cascade="all, delete-orphan")
+    push_tokens = relationship("PushToken", back_populates="responder", cascade="all, delete-orphan")
