@@ -1,6 +1,7 @@
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.notification_template import NotificationType
 
@@ -12,6 +13,17 @@ class SubscriptionSchema(BaseModel):
     endpoint: str
     keys: SubscriptionKeys
     responder_id: UUID
+
+
+class ExpoSubscriptionSchema(BaseModel):
+    """Native app push registration (#33): the responder app posts its Expo
+    push token instead of a VAPID endpoint+keys pair. responderId arrives
+    camelCase from the JS client."""
+    token: str
+    platform: Literal["android", "ios", "expo"] = "expo"
+    responder_id: UUID = Field(alias="responderId")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class CustomNotificationPayload(BaseModel):

@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.core.rate_limiter import limiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud import citizen_subscription_crud
-from app.schemas import SubscriptionSchema, CitizenSubscriptionCreate, CitizenSubscriptionDelete
+from app.schemas import SubscriptionSchema, ExpoSubscriptionSchema, CitizenSubscriptionCreate, CitizenSubscriptionDelete
 from app.schemas.subscription import SendAlarmSchema, SendNotificationSchema
 from app.services import push_subscription_service, notification_service
 
@@ -21,13 +21,19 @@ def get_vapid_public_key():
 
 @router.post("/subscribe", status_code=204)
 async def save_subscription(
-    data: SubscriptionSchema,
+    data: SubscriptionSchema | ExpoSubscriptionSchema,
     current_responder: CurrentResponder = Depends(require_responder_auth),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     if current_responder.id != str(data.responder_id):
         raise HTTPException(status_code=403, detail="Cannot subscribe for another responder")
-    await push_subscription_service.subscribe(data=data, db=db)
+    # The native app posts its Expo push token ({token, platform,
+    # responderId}); the PWA posts a VAPID endpoint+keys pair. Both land
+    # here — the schemas share no required field, so the union discriminates.
+    if isinstance(data, ExpoSubscriptionSchema):
+        await push_subscription_service.subscribe_expo(data=data, db=db)
+    else:
+        await push_subscription_service.subscribe(data=data, db=db)
 
 
 @router.post("/send-notification", status_code=204, dependencies=[Depends(require_auth)])

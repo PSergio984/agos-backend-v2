@@ -55,7 +55,7 @@ from .upload import UploadResponse
 from .fusion_analysis import FusionData, BlockageStatus, WaterLevelStatus, WeatherStatus, FusionAnalysisData, ObstructionConfidence, AnomalyType
 from .daily_summary import DailySummaryResponse, DailySummaryAnalysisRequest
 
-from .subscription import SubscriptionKeys, SubscriptionSchema, SendNotificationSchema, CustomNotificationPayload
+from .subscription import SubscriptionKeys, SubscriptionSchema, ExpoSubscriptionSchema, SendNotificationSchema, CustomNotificationPayload
 from .notification_template import NotificationTemplateResponse, CreateNotificationTemplateRequest
 from .notification_log import ResponderNotificationSummary, DeliveryLogItem, DeliveryLogPaginatedResponse
 from .model_reading_log import ModelReadingListItem, ModelReadingPaginatedResponse, ModelReadingDetailResponse
