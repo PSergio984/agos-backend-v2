@@ -19,10 +19,10 @@ async def get_system_setting(key: str, db: AsyncSession = Depends(get_db)) -> Sy
 
 @router.get("/{key}/value", response_model=None, dependencies=[Depends(require_auth)])
 async def get_system_setting_value(key: str, db: AsyncSession = Depends(get_db)) -> any:
-    value = await system_settings_crud.get_value(db=db, key=key)
-    if value is None:
+    setting = await system_settings_crud.get(db=db, key=key)
+    if setting is None:
         raise HTTPException(status_code=404, detail="System settings not found")
-    return value
+    return setting.json_value
 
 
 @router.put("/{key}", response_model=None)

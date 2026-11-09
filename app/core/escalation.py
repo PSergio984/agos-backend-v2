@@ -18,6 +18,7 @@ async def escalation_check_job():
             max_escalation = await system_settings_crud.get_value(db, "max_escalation_count")
 
             if not timeout or not max_escalation:
+                print("⚠️ Escalation check skipped: escalation settings not configured")
                 return
 
             timeout = int(timeout)
