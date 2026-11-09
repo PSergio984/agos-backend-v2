@@ -22,6 +22,8 @@ class CacheService:
     # mutable cache
     async def update_alert_thresholds_cache(self, db: AsyncSession) -> None:
         alert_thresholds_data = await system_settings_crud.get_value(db=db, key="alert_thresholds")
+        if alert_thresholds_data is None:
+            raise ValueError("alert_thresholds setting is not configured")
         self._alert_thresholds_cache = AlertThresholdsResponse.model_validate(alert_thresholds_data)
 
 

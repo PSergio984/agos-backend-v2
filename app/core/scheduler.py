@@ -60,6 +60,8 @@ async def data_cleanup_job():
 
             # Data retention cleanup
             retention_days = await system_settings_crud.get_value(db, "data_retention_days")
+            if retention_days is None:
+                raise ValueError("data_retention_days setting is not configured")
             cutoff = now - timedelta(days=int(retention_days))
 
             sensor_count = await sensor_reading_crud.delete_older_than(db, cutoff)
