@@ -169,7 +169,10 @@ class DailySummaryService:
     async def backfill_missing_summaries(self, db: AsyncSession, days: int | None = None) -> int:
         """Recover completed days within the current raw-data retention period."""
         if days is None:
-            days = int(await system_settings_crud.get_value(db, "data_retention_days"))
+            retention = await system_settings_crud.get_value(db, "data_retention_days")
+            if retention is None:
+                raise ValueError("data_retention_days setting is not configured")
+            days = int(retention)
         if days < 1:
             raise ValueError("Daily summary backfill requires a positive retention period")
         location_ids = await cache_service.get_all_location_ids(db)
